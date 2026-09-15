@@ -25,6 +25,9 @@ browser update is not guaranteed; see [Browser updates](#browser-updates).
 > this MIT-licensed project at no cost. If it improves your Windows HDR setup,
 > you can optionally [buy me a coffee ☕](https://buymeacoffee.com/mrsaliericze).
 
+Created by **[Jaroslav Safar](https://jaroslavsafar.com)**, an independent
+developer from the Czech Republic. [Meet the author](#hi-im-jaroslav-).
+
 ## What it preserves
 
 The correction is deliberately limited to ordinary SDR BT.709/sRGB content:
@@ -239,9 +242,24 @@ publishes its SHA-256 together with the exact source commit.
 - Only browser and GPU roles receive their corresponding changes; renderer and
   utility processes retain upstream behavior.
 
+## Hi, I'm Jaroslav 👋
+
+I'm an independent developer from the Czech Republic building iOS apps,
+Windows tools, open-source software and web projects.
+
+Selected work:
+
+- **iOS apps**, including TrayMate, Můj radar and Health Metrics Widgets.
+- **Gamma22Tray** — the Windows HDR SDR gamma 2.2 runtime fix for Chrome,
+  Edge and Brave featured in this repository.
+- **Web and e-commerce projects.**
+
+Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
+
 ## Project information
 
 - Author: Jaroslav Safar
+- Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
 - Contact: `jaroslav.safar.91@gmail.com`
 - License: [MIT](LICENSE)
 - Current stable release: [Gamma22Tray v0.6.0](https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22/releases/tag/v0.6.0)
