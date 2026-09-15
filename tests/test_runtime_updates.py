@@ -141,7 +141,7 @@ class TrayInterfaceTests(unittest.TestCase):
         self.assertEqual(tray.APP_NAME, "Gamma22Tray")
         self.assertEqual(tray.APP_VERSION, "0.6.0")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
-        self.assertEqual(tray.APP_EMAIL, "jaroslav.safar.91@gmail.com")
+        self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
 
     def test_enable_autostart_writes_current_executable_to_hkcu(self):
         key = object()

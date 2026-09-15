@@ -260,7 +260,7 @@ Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
 
 - Author: Jaroslav Safar
 - Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
-- Contact: `jaroslav.safar.91@gmail.com`
+- Contact: [hello@jaroslavsafar.com](mailto:hello@jaroslavsafar.com)
 - License: [MIT](LICENSE)
 - Current stable release: [Gamma22Tray v0.6.0](https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22/releases/tag/v0.6.0)
 
