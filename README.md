@@ -1,13 +1,24 @@
-# Gamma22Tray — Chromium HDR SDR Gamma 2.2
+# Browser Gamma Fix
 
-Gamma22Tray corrects ordinary SDR rendering in **normally installed 64-bit
+Previously called **Gamma22Tray**. The repository has moved to
+[`mrsaliericz/browser-gamma-fix`](https://github.com/mrsaliericz/browser-gamma-fix);
+existing GitHub links redirect to the new location.
+
+The published v0.6.0 download still carries the former name. New builds use
+the Browser Gamma Fix name in the interface and `BrowserGammaFix-win64.zip`
+for downloads. The internal `Gamma22Tray` folder, `Gamma22Tray.exe`, startup
+registry value and diagnostic paths are intentionally retained so existing
+shortcuts and startup settings remain compatible. Historical release notes
+keep their original names.
+
+Browser Gamma Fix corrects ordinary SDR rendering in **normally installed 64-bit
 Google Chrome, Microsoft Edge and Brave** while Windows HDR is enabled. It keeps the
 browsers on their native HDR/scRGB presentation path but interprets ordinary
 BT.709/sRGB SDR content using pure gamma 2.2.
 
-> **[Download Gamma22Tray v0.6.0 — Chrome, Edge and Brave](https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22/releases/latest)**
+> **[Download Browser Gamma Fix v0.6.0 — Chrome, Edge and Brave](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
 
-Portable or isolated browser copies are not required. Gamma22Tray runs in the
+Portable or isolated browser copies are not required. Browser Gamma Fix runs in the
 Windows notification area and applies the correction only in process memory;
 it does not modify browser files on disk.
 
@@ -43,12 +54,12 @@ The correction is deliberately limited to ordinary SDR BT.709/sRGB content:
 - Windows 11 x64 with Windows HDR enabled.
 - Normally installed 64-bit Google Chrome, Microsoft Edge and/or Brave.
 - A structurally compatible Chromium build. Unknown layouts are rejected
-  before Gamma22Tray writes anything to process memory.
+  before Browser Gamma Fix writes anything to process memory.
 
 ## Install and run
 
 1. Download `Gamma22Tray-win64.zip` from the
-   [latest stable release](https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22/releases/latest).
+   [latest stable release](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest).
 2. Extract the **complete `Gamma22Tray` folder** to a permanent location.
 3. Keep `Gamma22Tray.exe` beside its `_internal` folder. Copying the EXE alone
    will cause a missing Python DLL error.
@@ -64,18 +75,51 @@ disabled. Right-click it to access:
 
 - **Disable/Enable Gamma 2.2 fix**
 - **Start with Windows**
-- **About Gamma22Tray**
+- **About Browser Gamma Fix**
+- **Do you like this app? Support me!** — opens the optional Buy Me a Coffee page.
 - **Open diagnostic log**
 - **Exit**
 
 Turning the fix off restores upstream code and cached SDR color objects in
-running browser processes. Exiting Gamma22Tray does not undo changes already
+running browser processes. Exiting Browser Gamma Fix does not undo changes already
 made in an existing process; disable the fix first or close the browser. All
 in-memory changes disappear naturally when the browser exits.
 
 ## Browser updates
 
-Gamma22Tray checks the installed Chrome, Edge and Brave DLL generations every five
+### Application updater (local v0.7.0 development build)
+
+The upcoming tray updater checks GitHub's latest stable release on startup,
+then daily, and when a browser DLL is rejected by the layout analyzer. Process
+access errors do not trigger compatibility update checks. Automatic attempts
+are limited to one per 15 minutes across browsers and one per DLL identity per
+day; this history survives application restarts. **Check for updates…** in the
+tray menu allows a manual check.
+
+If an update is available, the tray offers **Install version…**. Installation
+requires confirmation. A newer release may resolve compatibility, but its
+availability alone does not prove that a particular browser is supported.
+
+The updater downloads the official ZIP over HTTPS and checks its size and
+GitHub asset SHA-256 before extraction. It replaces the complete onedir package
+only after the old tray exits, preserves a backup and waits for the new tray to
+confirm startup. A launch failure triggers rollback. Open browsers can remain
+running; the installation path and Windows startup registration are retained.
+This is an integrity check against GitHub metadata, not an independent code
+signature.
+
+Automatic replacement requires a dedicated, writable folder containing only
+`Gamma22Tray.exe` and `_internal`, without links or junctions. Otherwise use a
+manual update. Backup and diagnostic files remain in a sibling
+`.gamma22-update-*` directory (`previous` contains the old installation).
+They are intentionally retained rather than automatically deleted.
+
+The updater is not included in the published v0.6.0 binary. The first version
+containing it must be installed manually.
+
+### Browser generation monitoring
+
+Browser Gamma Fix checks the installed Chrome, Edge and Brave DLL generations every five
 seconds. When it recognizes a compatible update, it:
 
 1. suspends new process-memory writes,
@@ -91,7 +135,7 @@ manual intervention or repatching.
 Edge `152.0.4191.53` subsequently changed the recognized singleton layout from
 98 to 97 sRGB initializers. Gamma22Tray v0.4.2 adds support for this layout and
 checks that every associated sRGB load and singleton store is accounted for.
-Older Gamma22Tray versions safely report **Unsupported/Error** for this Edge
+Older Browser Gamma Fix versions safely report **Unsupported/Error** for this Edge
 build and need to be updated; restarting the old patcher alone will not help.
 
 Chrome `153.0.8010.37` changed two stack-frame offsets immediately before its
@@ -129,7 +173,7 @@ the author confirmed the visual result.
 This improves tolerance of the supported compiler variations. It does not
 remove the existing 97/98 Edge initializer-count checks, the exact output-helper
 check or all other layout constraints. A different rendering implementation
-can still require an update to Gamma22Tray.
+can still require an update to Browser Gamma Fix.
 
 ### Brave support (v0.6.0)
 
@@ -146,7 +190,7 @@ through future Brave updates still needs real-world confirmation.
 ## Start with Windows
 
 Use **Start with Windows** in the tray menu after placing the extracted folder
-in its permanent location. Gamma22Tray creates only this per-user registry
+in its permanent location. Browser Gamma Fix creates only this per-user registry
 value and does not require administrator rights:
 
 ```text
@@ -159,16 +203,16 @@ location and enable the option again.
 
 ## Using it with dwm_eotf_rs
 
-Gamma22Tray works well alongside
+Browser Gamma Fix works well alongside
 [`dwm_eotf_rs`](https://github.com/SERGEYDJUM/dwm_eotf_rs), and using both is
 recommended when you want gamma correction in other Windows applications too.
 
 Chromium remains on its HDR/scRGB presentation path, so `dwm_eotf_rs` does not
-apply a second correction to the browser. Gamma22Tray handles Chromium's
+apply a second correction to the browser. Browser Gamma Fix handles Chromium's
 internal SDR-to-scRGB conversion while `dwm_eotf_rs` continues handling other
 SDR applications that pass through the Windows DWM path.
 
-Gamma22Tray targets gamma **2.2**, not 2.4. There is currently no 2.4 mode.
+Browser Gamma Fix targets gamma **2.2**, not 2.4. There is currently no 2.4 mode.
 
 ## Browser video
 
@@ -176,21 +220,21 @@ Gamma22Tray targets gamma **2.2**, not 2.4. There is currently no 2.4 mode.
 - Ordinary SDR video follows Chromium's active video/compositor path and may
   briefly change appearance when player UI or overlays appear.
 - NVIDIA RTX Video HDR can convert supported SDR video to HDR before the final
-  presentation path. When it is active, Gamma22Tray intentionally leaves that
+  presentation path. When it is active, Browser Gamma Fix intentionally leaves that
   HDR result unchanged.
 
 ## HDR photos and Google Photos
 
-Gamma22Tray intentionally does not modify HDR gain-map reconstruction or
+Browser Gamma Fix intentionally does not modify HDR gain-map reconstruction or
 Display-P3 images. Services can supply an iPhone photo as an Ultra HDR JPEG
 with a P3 or sRGB SDR base plus a separate gain map. Its shadows and midtones
 may therefore differ from Apple Photos or iCloud even while HDR highlights and
 wide gamut remain active. This is outside the ordinary BT.709/sRGB path changed
-by Gamma22Tray.
+by Browser Gamma Fix.
 
 ## Antivirus notice
 
-Gamma22Tray is unsigned and necessarily uses Windows debugger attachment and
+Browser Gamma Fix is unsigned and necessarily uses Windows debugger attachment and
 process-memory writes. Antivirus products can classify those behaviors as
 suspicious even when the program was built from this published source.
 
@@ -227,7 +271,7 @@ python -m pip install -r requirements.txt
 The build produces:
 
 ```text
-dist\Gamma22Tray-win64.zip
+dist\BrowserGammaFix-win64.zip
 ```
 
 The GitHub release workflow runs the automated tests, builds the onedir ZIP and
@@ -250,7 +294,7 @@ Windows tools, open-source software and web projects.
 Selected work:
 
 - **iOS apps**, including TrayMate, Můj radar and Health Metrics Widgets.
-- **Gamma22Tray** — the Windows HDR SDR gamma 2.2 runtime fix for Chrome,
+- **Browser Gamma Fix** — the Windows HDR SDR gamma 2.2 runtime fix for Chrome,
   Edge and Brave featured in this repository.
 - **Web and e-commerce projects.**
 
@@ -262,7 +306,7 @@ Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
 - Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
 - Contact: [hello@jaroslavsafar.com](mailto:hello@jaroslavsafar.com)
 - License: [MIT](LICENSE)
-- Current stable release: [Gamma22Tray v0.6.0](https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22/releases/tag/v0.6.0)
+- Current stable release: [Browser Gamma Fix v0.6.0](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.6.0)
 
 Historical documentation for the retired version-specific workflows is kept
 in [`archive/LEGACY_VERSION_SPECIFIC_PATCHER.md`](archive/LEGACY_VERSION_SPECIFIC_PATCHER.md).

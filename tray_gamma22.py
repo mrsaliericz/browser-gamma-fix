@@ -12,8 +12,11 @@ import sys
 import threading
 import time
 import winreg
+import queue
+import hashlib
 
 import hot_attach_gamma22 as hot
+import app_updates
 
 
 WM_DESTROY = 0x0002
@@ -24,6 +27,7 @@ WM_RBUTTONUP = 0x0205
 WM_APP = 0x8000
 WM_TRAY = WM_APP + 1
 WM_STATUS_CHANGED = WM_APP + 2
+WM_APP_UPDATE = WM_APP + 3
 NIM_ADD = 0
 NIM_MODIFY = 1
 NIM_DELETE = 2
@@ -48,18 +52,24 @@ CMD_EXIT = 102
 CMD_TOGGLE = 103
 CMD_AUTOSTART = 104
 CMD_ABOUT = 105
+CMD_CHECK_UPDATE = 106
+CMD_INSTALL_UPDATE = 107
+CMD_UPDATE_STATUS = 108
+CMD_SUPPORT = 109
 UPDATE_POLL_SECONDS = 5.0
 FAILED_GENERATION_RETRY_SECONDS = 30.0
 UPDATE_RESTART_SETTLE_SECONDS = 15.0
 RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
-APP_NAME = "Gamma22Tray"
-APP_VERSION = "0.6.0"
+APP_NAME = "Browser Gamma Fix"
+APP_VERSION = "0.7.0-beta.1"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
-APP_URL = "https://github.com/mrsaliericz/chromium-hdr-sdr-gamma22"
+APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
+SUPPORT_URL = "https://buymeacoffee.com/mrsaliericze"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# Keep the legacy registration name so rebranding does not duplicate startup.
 RUN_VALUE_NAME = "Gamma22Tray"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -232,23 +242,122 @@ active_icon = None
 inactive_icon = None
 owned_icons: set[int] = set()
 log_path = None
+update_events = queue.Queue()
+update_lock = threading.Lock()
+update_busy = False
+available_release = None
+update_status = "Updates: not checked yet"
+update_schedule = None
+
+
+def request_release_check(key="periodic", manual=False):
+    global update_busy, update_schedule, update_status
+    with update_lock:
+        if update_busy:
+            return
+        try:
+            if update_schedule is None:
+                root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ChromiumGamma22"
+                update_schedule = app_updates.CheckSchedule(root / "update-checks.json")
+            if not update_schedule.claim(key, manual):
+                return
+        except Exception as error:
+            print(f"Update check scheduling failed: {error}")
+            return
+        update_busy = True
+        update_status = "Checking for a newer stable release…"
+
+    def check():
+        try:
+            result = app_updates.latest(APP_VERSION)
+            update_events.put(("checked", result, manual, key))
+        except Exception as error:
+            update_events.put(("error", str(error), manual, key))
+        user32.PostMessageW(window_handle, WM_APP_UPDATE, 0, 0)
+    threading.Thread(target=check, name="ReleaseCheck", daemon=True).start()
+
+
+def unsupported_release_check(dll, identity):
+    key = "unsupported:" + hashlib.sha256(repr(identity).encode()).hexdigest()
+    request_release_check(key)
+
+
+def install_available_update():
+    global update_busy, update_status
+    if update_busy or available_release is None:
+        return
+    if not getattr(sys, "frozen", False):
+        user32.MessageBoxW(window_handle, "Automatic installation requires the packaged EXE.", APP_NAME, 0x40)
+        return
+    release = available_release
+    if user32.MessageBoxW(window_handle,
+            f"Download and install {release.tag}?\n\nThis may resolve browser compatibility. "
+            "Browser Gamma Fix will restart; your browsers can remain open. "
+            "The previous installation will be kept as a backup.", APP_NAME, 0x24) != 6:
+        return
+    with update_lock:
+        if update_busy: return
+        update_busy = True
+        update_status = "Downloading and verifying update…"
+    def download():
+        try:
+            job = app_updates.prepare(release, sys.executable, enabled=fix_mode()[0])
+            app_updates.start_helper(job)
+            update_events.put(("install", str(job), True, "manual"))
+        except Exception as error:
+            update_events.put(("error", str(error), True, "manual"))
+        user32.PostMessageW(window_handle, WM_APP_UPDATE, 0, 0)
+    threading.Thread(target=download, name="ReleaseDownload", daemon=True).start()
+
+
+def handle_update_events():
+    global update_busy, available_release, update_status
+    while not update_events.empty():
+        kind, result, manual, key = update_events.get_nowait()
+        with update_lock:
+            update_busy = False
+        if kind == "install":
+            print(f"Installing application update; backup and diagnostics: {result}")
+            user32.PostMessageW(window_handle, WM_CLOSE, 0, 0)
+            return
+        if kind == "error":
+            update_status = "Update check/install failed — retry from menu"
+            print(f"Application updater: {result}")
+            if manual:
+                user32.MessageBoxW(window_handle, f"Update failed:\n\n{result}\n\nThe existing installation is retained.", APP_NAME, 0x10)
+            continue
+        available_release = result
+        update_status = (f"Update available: {result.tag}" if result else
+                         "No newer stable fix available" if key.startswith("unsupported:") else
+                         "No newer stable release available")
+        if manual:
+            if result: install_available_update()
+            else: user32.MessageBoxW(window_handle, update_status, APP_NAME, 0x40)
+        elif result and notify_data is not None:
+            notify_data.uFlags |= 0x10  # NIF_INFO
+            notify_data.szInfoTitle = "Browser Gamma Fix update available"
+            notify_data.szInfo = f"{result.tag} may resolve browser compatibility. Right-click the tray icon to install."
+            notify_data.dwInfoFlags = 1
+            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(notify_data))
+            notify_data.uFlags &= ~0x10
 
 
 class BrowserGenerations:
     """Cache verified runtime plans across browser update transitions."""
 
-    def __init__(self, browser: Path, *, locator=None, planner=None, clock=None):
+    def __init__(self, browser: Path, *, locator=None, planner=None, clock=None, on_unsupported=None):
         self.browser = browser.resolve()
         self._locator = locator or hot.locate_chrome_dll
         self._planner = planner or hot.make_runtime_plan
         self._clock = clock or time.monotonic
         self.plans_by_dll: dict[str, list] = {}
         self._plans_by_identity: dict[tuple[str, int, int], object] = {}
-        self._failed_identities: dict[tuple[str, int, int], tuple[float, str]] = {}
+        self._failed_identities: dict[tuple[str, int, int], tuple[float, Exception]] = {}
         self.active_identity: tuple[str, int, int] | None = None
         self.active_dll: Path | None = None
         self.active_error: str | None = None
         self.next_poll = 0.0
+        self.on_unsupported = on_unsupported
 
     def _validated_identity(self, dll: Path) -> tuple[Path, tuple[str, int, int]]:
         resolved = dll.resolve(strict=True)
@@ -277,15 +386,16 @@ class BrowserGenerations:
         now = self._clock()
         failed = self._failed_identities.get(identity)
         if failed is not None and now < failed[0]:
-            raise hot.PatchError(failed[1])
+            raise failed[1]
         try:
             plan = self._planner(resolved)
         except Exception as error:
-            message = str(error)
             self._failed_identities[identity] = (
                 now + FAILED_GENERATION_RETRY_SECONDS,
-                message,
+                error,
             )
+            if isinstance(error, hot.PatchError) and self.on_unsupported is not None:
+                self.on_unsupported(resolved, identity)
             raise
 
         self._failed_identities.pop(identity, None)
@@ -597,6 +707,12 @@ def show_menu(hwnd) -> None:
             menu, autostart_flags, CMD_AUTOSTART, "Start with Windows"
         )
         user32.AppendMenuW(menu, MF_STRING, CMD_ABOUT, f"About {APP_NAME}…")
+        user32.AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_UPDATE_STATUS, update_status)
+        user32.AppendMenuW(menu, MF_STRING | (MF_GRAYED if update_busy else 0), CMD_CHECK_UPDATE, "Check for updates…")
+        if available_release is not None:
+            user32.AppendMenuW(menu, MF_STRING | (MF_GRAYED if update_busy else 0), CMD_INSTALL_UPDATE, f"Install {available_release.tag}…")
+        user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
+        user32.AppendMenuW(menu, MF_STRING, CMD_SUPPORT, "Do you like this app? Support me!")
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(menu, MF_STRING, CMD_LOG, "Open diagnostic log")
         user32.AppendMenuW(menu, MF_STRING, CMD_EXIT, "Exit")
@@ -618,6 +734,12 @@ def show_menu(hwnd) -> None:
             toggle_autostart()
         elif command == CMD_ABOUT:
             show_about()
+        elif command == CMD_CHECK_UPDATE:
+            request_release_check(manual=True)
+        elif command == CMD_INSTALL_UPDATE:
+            install_available_update()
+        elif command == CMD_SUPPORT:
+            shell32.ShellExecuteW(hwnd, "open", SUPPORT_URL, None, None, SW_SHOWNORMAL)
         elif command == CMD_LOG:
             open_log()
         elif command == CMD_EXIT:
@@ -629,6 +751,9 @@ def show_menu(hwnd) -> None:
 
 @WNDPROC
 def window_proc(hwnd, message, wparam, lparam):
+    if message == WM_APP_UPDATE:
+        handle_update_events()
+        return 0
     if message == WM_TRAY:
         event = int(lparam) & 0xFFFF
         if event in (WM_RBUTTONUP, WM_CONTEXTMENU):
@@ -738,7 +863,7 @@ def worker() -> None:
         states[name] = "analyzing"
         publish_status()
         try:
-            generations = BrowserGenerations(browser)
+            generations = BrowserGenerations(browser, on_unsupported=unsupported_release_check)
             dll = hot.locate_chrome_dll(browser, None)
             plan, _added, _changed = generations.activate(dll)
             current = set(hot.running_processes_for_executable(browser))
@@ -774,6 +899,7 @@ def worker() -> None:
     if initial_switching:
         finish_fix_toggle()
     while not stop_event.is_set():
+        request_release_check()
         enabled, _switching = fix_mode()
         mode_changed = enabled != last_enabled
         if mode_changed:
@@ -799,7 +925,7 @@ def worker() -> None:
                         print(
                             f"{name}: suspending new runtime writes for "
                             f"{UPDATE_RESTART_SETTLE_SECONDS:.0f} seconds before "
-                            "restarting Gamma22Tray"
+                            "restarting Browser Gamma Fix"
                         )
                     elif update_detail != target["last_update_error"]:
                         target["last_update_error"] = update_detail
@@ -906,16 +1032,16 @@ def worker() -> None:
                 states[name] = "error"
                 print(f"{name} watcher ERROR: {error}")
             publish_status()
-        if update_restart.due():
+        if update_restart.due() and not update_busy:
             print(
-                "Browser update settling period complete; restarting Gamma22Tray "
+                "Browser update settling period complete; restarting Browser Gamma Fix "
                 "before attaching to the current browser generation"
             )
             set_status("Browser updated — restarting safely…")
             try:
                 request_process_restart()
             except Exception as error:
-                print(f"Automatic Gamma22Tray restart failed: {error}")
+                print(f"Automatic Browser Gamma Fix restart failed: {error}")
                 set_status("Browser updated — manual restart required")
             return
         if mode_changed:
@@ -926,7 +1052,9 @@ def worker() -> None:
 
 
 def main() -> int:
-    global active_icon, inactive_icon, log_path, notify_data, owned_icons, window_handle
+    global active_icon, inactive_icon, log_path, notify_data, owned_icons, window_handle, fix_enabled
+    if '--start-fix-disabled' in sys.argv:
+        fix_enabled = False
     if not wait_for_restart_parent(sys.argv[1:]):
         return 1
     log_path = hot.configure_background_process()
@@ -961,6 +1089,7 @@ def main() -> int:
         raise ctypes.WinError(ctypes.get_last_error())
     notify_data.uVersion = NOTIFYICON_VERSION_4
     shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(notify_data))
+    app_updates.confirm_startup(sys.argv[1:], APP_VERSION)
 
     threading.Thread(target=worker, name="Gamma22Watcher", daemon=True).start()
     message = wintypes.MSG()
@@ -974,4 +1103,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--apply-app-update":
+        try:
+            app_updates.apply_job(sys.argv[2])
+        except Exception as error:
+            user32.MessageBoxW(None, f"Browser Gamma Fix update failed:\n\n{error}", APP_NAME, 0x10)
+            raise SystemExit(1)
+        raise SystemExit(0)
     raise SystemExit(main())
