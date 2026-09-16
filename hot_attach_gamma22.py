@@ -632,7 +632,7 @@ def attach_one_multi(
                         candidates = plans_by_dll.get(loaded_key, [])
                         if (
                             not candidates
-                            and loaded_path.name.lower() in {"chrome.dll", "msedge.dll"}
+                            and loaded_path.name.lower() in {"chrome.dll", "msedge.dll", "vivaldi.dll"}
                             and observed_dll_is_trusted(loaded_path, plans_by_dll)
                         ):
                             observed_dll = loaded_path
