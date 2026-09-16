@@ -17,7 +17,7 @@ try {
         --name Gamma22Tray `
         tray_gamma22.py
 
-    $archivePath = Join-Path $projectRoot 'dist\Gamma22Tray-win64.zip'
+    $archivePath = Join-Path $projectRoot 'dist\BrowserGammaFix-win64.zip'
     if (Test-Path -LiteralPath $archivePath) {
         Remove-Item -LiteralPath $archivePath -Force
     }

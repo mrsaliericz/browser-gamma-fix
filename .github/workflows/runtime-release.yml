@@ -1,4 +1,4 @@
-name: Build Gamma22Tray release
+name: Build Browser Gamma Fix release
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -v
 
-      - name: Build Gamma22Tray onedir package
+      - name: Build Browser Gamma Fix onedir package
         shell: powershell
         run: .\build_hot_attach_exe.ps1
 
@@ -40,7 +40,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $sourceNotes)) {
             throw "Release notes not found: $sourceNotes"
           }
-          $asset = "dist/Gamma22Tray-win64.zip"
+          $asset = "dist/BrowserGammaFix-win64.zip"
           $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash
           $notes = Join-Path $env:RUNNER_TEMP "release-notes.md"
           Copy-Item -LiteralPath $sourceNotes -Destination $notes
@@ -48,7 +48,7 @@ jobs:
             "",
             "### Release package",
             "",
-            "SHA-256 (Gamma22Tray-win64.zip):",
+            "SHA-256 (BrowserGammaFix-win64.zip):",
             "",
             $hash,
             "",
@@ -57,9 +57,9 @@ jobs:
           Add-Content -LiteralPath $notes -Value $releaseDetails
           $arguments = @(
             "release", "create", $tag,
-            "$asset#Gamma22Tray-win64.zip",
+            "$asset#BrowserGammaFix-win64.zip",
             "--verify-tag",
-            "--title", "Gamma22Tray $tag - Chrome, Edge and Brave runtime release",
+            "--title", "Browser Gamma Fix $tag - Chrome, Edge and Brave runtime release",
             "--notes-file", $notes
           )
           if ($tag -match "-") {

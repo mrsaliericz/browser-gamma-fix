@@ -138,8 +138,8 @@ class RuntimeUpdateTests(unittest.TestCase):
 
 class TrayInterfaceTests(unittest.TestCase):
     def test_about_metadata_is_present(self):
-        self.assertEqual(tray.APP_NAME, "Gamma22Tray")
-        self.assertEqual(tray.APP_VERSION, "0.6.0")
+        self.assertEqual(tray.APP_NAME, "Browser Gamma Fix")
+        self.assertEqual(tray.APP_VERSION, "0.7.0-beta.1")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
         self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
 
