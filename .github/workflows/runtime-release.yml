@@ -59,7 +59,7 @@ jobs:
             "release", "create", $tag,
             "$asset#BrowserGammaFix-win64.zip",
             "--verify-tag",
-            "--title", "Browser Gamma Fix $tag - Chrome, Edge and Brave runtime release",
+            "--title", "Browser Gamma Fix $tag - Chrome, Edge, Brave and Vivaldi runtime release",
             "--notes-file", $notes
           )
           if ($tag -match "-") {

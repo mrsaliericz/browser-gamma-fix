@@ -4,7 +4,7 @@ Previously called **Gamma22Tray**. The repository has moved to
 [`mrsaliericz/browser-gamma-fix`](https://github.com/mrsaliericz/browser-gamma-fix);
 existing GitHub links redirect to the new location.
 
-The published v0.6.0 download still carries the former name. New builds use
+Older releases through v0.6.0 carry the former name. Starting with v0.7.0, builds use
 the Browser Gamma Fix name in the interface and `BrowserGammaFix-win64.zip`
 for downloads. The internal `Gamma22Tray` folder, `Gamma22Tray.exe`, startup
 registry value and diagnostic paths are intentionally retained so existing
@@ -12,24 +12,23 @@ shortcuts and startup settings remain compatible. Historical release notes
 keep their original names.
 
 Browser Gamma Fix corrects ordinary SDR rendering in **normally installed 64-bit
-Google Chrome, Microsoft Edge and Brave** while Windows HDR is enabled. It keeps the
+Google Chrome, Microsoft Edge, Brave and Vivaldi** while Windows HDR is enabled. It keeps the
 browsers on their native HDR/scRGB presentation path but interprets ordinary
 BT.709/sRGB SDR content using pure gamma 2.2.
 
-> **[Download Browser Gamma Fix v0.6.0 — Chrome, Edge and Brave](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
+> **[Download Browser Gamma Fix v0.7.0 — Chrome, Edge, Brave and Vivaldi](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
 
 Portable or isolated browser copies are not required. Browser Gamma Fix runs in the
 Windows notification area and applies the correction only in process memory;
 it does not modify browser files on disk.
 
-> **Stable v0.6.0 — 14 September 2026:** Adds **Brave** support and includes the
-> more resilient Edge 153 output analyzer previously tested in the v0.5 beta.
-> The author has confirmed the visual result in Brave as well as Chrome and
-> Edge. Run one tray application to monitor all three supported browsers.
+> **Stable v0.7.0 — 16 September 2026:** Adds **Vivaldi** support and the new
+> **Browser Gamma Fix** name, plus application update checks and user-confirmed
+> installation. Run one tray application to monitor all four supported browsers.
 
 The Edge analyzer decodes x64 instructions and follows arguments and branches,
 allowing verified changes in registers, stack offsets and code placement.
-Brave uses the existing Chrome analyzer. Compatibility with every future
+Brave and Vivaldi use the existing Chrome analyzer. Compatibility with every future
 browser update is not guaranteed; see [Browser updates](#browser-updates).
 
 > **Free and open source, forever.** You may use, share, modify and redistribute
@@ -47,24 +46,24 @@ The correction is deliberately limited to ordinary SDR BT.709/sRGB content:
 - Native HDR video remains on Chromium's original HDR path.
 - PQ, HLG, HDR black levels and highlights are not changed.
 - SDR appearance remains stable when HDR or P3 content appears or disappears.
-- Chrome, Edge and Brave browser files remain untouched on disk.
+- Chrome, Edge, Brave and Vivaldi browser files remain untouched on disk.
 
 ## Requirements
 
 - Windows 11 x64 with Windows HDR enabled.
-- Normally installed 64-bit Google Chrome, Microsoft Edge and/or Brave.
+- Normally installed 64-bit Google Chrome, Microsoft Edge, Brave and/or Vivaldi.
 - A structurally compatible Chromium build. Unknown layouts are rejected
   before Browser Gamma Fix writes anything to process memory.
 
 ## Install and run
 
-1. Download `Gamma22Tray-win64.zip` from the
+1. Download `BrowserGammaFix-win64.zip` from the
    [latest stable release](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest).
 2. Extract the **complete `Gamma22Tray` folder** to a permanent location.
 3. Keep `Gamma22Tray.exe` beside its `_internal` folder. Copying the EXE alone
    will cause a missing Python DLL error.
 4. Run `Gamma22Tray.exe` normally. Do not use **Run as administrator**.
-5. Start or continue using the normally installed Chrome, Edge or Brave.
+5. Start or continue using the normally installed Chrome, Edge, Brave or Vivaldi.
 
 Brave Stable is detected in its standard Program Files or per-user
 `%LOCALAPPDATA%` installation directory. Brave Beta/Nightly channels and
@@ -76,6 +75,7 @@ disabled. Right-click it to access:
 - **Disable/Enable Gamma 2.2 fix**
 - **Start with Windows**
 - **About Browser Gamma Fix**
+- **Check for updates…** and **Install version…** when a newer release is available
 - **Do you like this app? Support me!** — opens the optional Buy Me a Coffee page.
 - **Open diagnostic log**
 - **Exit**
@@ -87,9 +87,20 @@ in-memory changes disappear naturally when the browser exits.
 
 ## Browser updates
 
-### Application updater (local v0.7.0 development build)
+### Vivaldi support (v0.7.0)
 
-The upcoming tray updater checks GitHub's latest stable release on startup,
+The application also detects standard per-user and Program Files Vivaldi
+installations. Vivaldi uses `vivaldi.dll`; it is checked by the existing Chrome
+analyzer without relaxing structural validation. Read-only analysis passed for
+Vivaldi `8.2.4133.52`. Live attachment applied 94 GPU code writes, one cached
+sRGB object correction and two browser output writes. The DLL hash on disk
+remained unchanged. The author approved release after testing. Recovery across
+future Vivaldi updates still needs real-world confirmation; unknown layouts
+are rejected. Custom and standalone installation paths are not auto-detected.
+
+### Application updater (new in v0.7.0)
+
+The tray updater checks GitHub's latest stable release on startup,
 then daily, and when a browser DLL is rejected by the layout analyzer. Process
 access errors do not trigger compatibility update checks. Automatic attempts
 are limited to one per 15 minutes across browsers and one per DLL identity per
@@ -114,12 +125,13 @@ manual update. Backup and diagnostic files remain in a sibling
 `.gamma22-update-*` directory (`previous` contains the old installation).
 They are intentionally retained rather than automatically deleted.
 
-The updater is not included in the published v0.6.0 binary. The first version
-containing it must be installed manually.
+The updater is not included in v0.6.0 or earlier. Upgrade those versions to
+v0.7.0 manually: exit the old tray and replace its complete package, keeping
+the installation path if using Start with Windows.
 
 ### Browser generation monitoring
 
-Browser Gamma Fix checks the installed Chrome, Edge and Brave DLL generations every five
+Browser Gamma Fix checks the installed Chrome, Edge, Brave and Vivaldi DLL generations every five
 seconds. When it recognizes a compatible update, it:
 
 1. suspends new process-memory writes,
@@ -295,7 +307,7 @@ Selected work:
 
 - **iOS apps**, including TrayMate, Můj radar and Health Metrics Widgets.
 - **Browser Gamma Fix** — the Windows HDR SDR gamma 2.2 runtime fix for Chrome,
-  Edge and Brave featured in this repository.
+  Edge, Brave and Vivaldi featured in this repository.
 - **Web and e-commerce projects.**
 
 Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
@@ -306,7 +318,7 @@ Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
 - Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
 - Contact: [hello@jaroslavsafar.com](mailto:hello@jaroslavsafar.com)
 - License: [MIT](LICENSE)
-- Current stable release: [Browser Gamma Fix v0.6.0](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.6.0)
+- Current stable release: [Browser Gamma Fix v0.7.0](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.7.0)
 
 Historical documentation for the retired version-specific workflows is kept
 in [`archive/LEGACY_VERSION_SPECIFIC_PATCHER.md`](archive/LEGACY_VERSION_SPECIFIC_PATCHER.md).

@@ -63,7 +63,7 @@ RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
 APP_NAME = "Browser Gamma Fix"
-APP_VERSION = "0.7.0-beta.1"
+APP_VERSION = "0.7.0"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
 APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
@@ -361,7 +361,7 @@ class BrowserGenerations:
 
     def _validated_identity(self, dll: Path) -> tuple[Path, tuple[str, int, int]]:
         resolved = dll.resolve(strict=True)
-        expected_name = "msedge.dll" if self.browser.name.lower() == "msedge.exe" else "chrome.dll"
+        expected_name = {"msedge.exe": "msedge.dll", "vivaldi.exe": "vivaldi.dll"}.get(self.browser.name.lower(), "chrome.dll")
         if resolved.name.lower() != expected_name:
             raise hot.PatchError(f"Unexpected browser DLL name: {resolved}")
         try:
@@ -669,7 +669,7 @@ def show_about() -> None:
             f"{APP_NAME}\n"
             f"Version {APP_VERSION}\n\n"
             "Windows HDR SDR gamma 2.2 runtime fix for Google Chrome, "
-            "Microsoft Edge and Brave.\n\n"
+            "Microsoft Edge, Brave and Vivaldi.\n\n"
             f"Author: {APP_AUTHOR}\n"
             f"Contact: {APP_EMAIL}\n\n"
             f"{APP_URL}\n\n"
@@ -814,8 +814,9 @@ def load_app_icons() -> tuple[int, int, set[int]]:
     return fallback, fallback, set()
 
 
-def worker() -> None:
-    browser_locations = (
+def supported_browser_locations():
+    """Explicit standard install locations; never match arbitrary Chromium apps."""
+    return (
         (
             "Chrome",
             (
@@ -839,7 +840,20 @@ def worker() -> None:
                 / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
             ),
         ),
+        (
+            "Vivaldi",
+            (
+                Path(r"C:\Program Files\Vivaldi\Application\vivaldi.exe"),
+                Path(r"C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe"),
+                Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+                / "Vivaldi" / "Application" / "vivaldi.exe",
+            ),
+        ),
     )
+
+
+def worker() -> None:
+    browser_locations = supported_browser_locations()
     targets = []
     states = {}
     update_restart = UpdateRestartCoordinator()

@@ -831,7 +831,7 @@ def locate_chrome_dll(browser: Path, explicit: Path | None) -> Path:
         if not dll.is_file():
             raise PatchError(f"Browser DLL does not exist: {dll}")
         return dll
-    dll_names = ("msedge.dll",) if browser.name.lower() == "msedge.exe" else ("chrome.dll",)
+    dll_names = ({"msedge.exe": "msedge.dll", "vivaldi.exe": "vivaldi.dll"}.get(browser.name.lower(), "chrome.dll"),)
     direct_matches = [
         browser.parent / name for name in dll_names if (browser.parent / name).is_file()
     ]

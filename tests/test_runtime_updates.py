@@ -11,6 +11,35 @@ from tray_gamma22 import BrowserGenerations
 
 
 class RuntimeUpdateTests(unittest.TestCase):
+    def test_vivaldi_standard_locations(self):
+        with mock.patch.dict(tray.os.environ, {"LOCALAPPDATA": r"C:\Users\Test\AppData\Local"}):
+            locations = dict(tray.supported_browser_locations())["Vivaldi"]
+        self.assertEqual(len(locations), 3)
+        self.assertTrue(all(p.name == "vivaldi.exe" for p in locations))
+        self.assertIn(Path(r"C:\Users\Test\AppData\Local\Vivaldi\Application\vivaldi.exe"), locations)
+
+    def test_vivaldi_version_discovery_and_generation_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "vivaldi.exe"
+            browser.touch()
+            for version in ("8.2.4133.9", "8.2.4133.52"):
+                (root / version).mkdir()
+                (root / version / "vivaldi.dll").write_bytes(b"compatible")
+            dll = hot.locate_chrome_dll(browser, None)
+            self.assertEqual(dll.parent.name, "8.2.4133.52")
+            generations = BrowserGenerations(browser, planner=self.fake_plan)
+            generations.activate(dll)
+            wrong = dll.with_name("chrome.dll")
+            wrong.write_bytes(b"compatible")
+            with self.assertRaises(hot.PatchError):
+                generations.activate(wrong)
+            with tempfile.TemporaryDirectory() as other:
+                outside = Path(other) / "vivaldi.dll"
+                outside.write_bytes(b"compatible")
+                with self.assertRaises(hot.PatchError):
+                    generations._validated_identity(outside)
+
     def make_installation(self, root: Path):
         application = root / "Application"
         application.mkdir()
@@ -139,7 +168,7 @@ class RuntimeUpdateTests(unittest.TestCase):
 class TrayInterfaceTests(unittest.TestCase):
     def test_about_metadata_is_present(self):
         self.assertEqual(tray.APP_NAME, "Browser Gamma Fix")
-        self.assertEqual(tray.APP_VERSION, "0.7.0-beta.1")
+        self.assertEqual(tray.APP_VERSION, "0.7.0")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
         self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
 
