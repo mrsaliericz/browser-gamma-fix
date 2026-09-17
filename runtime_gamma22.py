@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Run 64-bit Google Chrome with the HDR SDR gamma 2.2 patch in memory.
+"""Run 64-bit Google Chrome or Brave with the HDR SDR gamma 2.2 patch in memory.
 
-The browser DLL is never modified.  Chrome is launched through the documented
-Windows debugging API so every descendant process pauses when chrome.dll is
-mapped.  Structurally verified instructions are then changed in that process's
-private memory before it can execute them.
+The browser DLL is never modified.  Chrome/Brave is launched through the
+documented Windows debugging API so every descendant process pauses when
+chrome.dll is mapped.  Structurally verified instructions are then changed
+in that process's private memory before it can execute them.
+
+Brave uses the same chrome.dll name and Chrome loads-trampoline layout
+(verified on Brave 153.1.95.101 with 47 initializer pairs), so it shares
+the Chrome runtime path. Microsoft Edge uses a separate singleton layout.
 
 This is an experimental proof of concept.  It intentionally refuses unknown
 binary layouts instead of guessing.
@@ -395,14 +399,48 @@ def running_processes_for_executable(executable: Path) -> list[int]:
     return result
 
 
+def _brave_exe_candidates() -> tuple[Path, ...]:
+    """Return known Brave executable locations, including per-user installs."""
+    candidates = [
+        Path(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
+        Path(r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ]
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(
+            Path(local_app_data)
+            / "BraveSoftware"
+            / "Brave-Browser"
+            / "Application"
+            / "brave.exe"
+        )
+    return tuple(candidates)
+
+
 def is_installed_chrome(browser: Path) -> bool:
-    installed = (
+    """Return whether a browser path is a normally installed Chrome or Brave.
+
+    Kept under the historic name for backward compatibility. Brave shares
+    Chrome's runtime layout and default-profile behavior, so installed Brave
+    (Program Files or per-user LOCALAPPDATA) counts as installed here.
+    """
+    static_installed = (
         Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
         Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
     )
+    candidates: list[Path] = list(static_installed) + list(_brave_exe_candidates())
     return any(
         normalized_path(browser) == normalized_path(candidate)
-        for candidate in installed
+        for candidate in candidates
+        if candidate.is_file()
+    )
+
+
+def is_installed_brave(browser: Path) -> bool:
+    """Return whether a browser path is a normally installed Brave."""
+    return any(
+        normalized_path(browser) == normalized_path(candidate)
+        for candidate in _brave_exe_candidates()
         if candidate.is_file()
     )
 
@@ -826,6 +864,12 @@ def patch_loaded_module(
 
 
 def locate_chrome_dll(browser: Path, explicit: Path | None) -> Path:
+    """Locate chrome.dll/msedge.dll for chrome.exe, brave.exe or msedge.exe.
+
+    brave.exe uses chrome.dll in a versioned subdirectory, exactly like
+    chrome.exe (e.g. Application/153.1.95.101/chrome.dll), so both share
+    the ("chrome.dll",) lookup. Only msedge.exe uses msedge.dll.
+    """
     if explicit:
         dll = explicit.resolve()
         if not dll.is_file():
@@ -1002,15 +1046,15 @@ def run_debug_loop(command: list[str], plan: RuntimePlan) -> int:
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Launch 64-bit Google Chrome with the SDR gamma 2.2 fix applied "
-            "only in process memory. chrome.dll is not modified."
+            "Launch 64-bit Google Chrome or Brave with the SDR gamma 2.2 fix "
+            "applied only in process memory. chrome.dll is not modified."
         )
     )
     parser.add_argument(
         "browser",
         type=Path,
         nargs="?",
-        help="Path to chrome.exe or portable launcher (auto-detected beside the runtime EXE)",
+        help="Path to chrome.exe, brave.exe or portable launcher (auto-detected beside the runtime EXE)",
     )
     parser.add_argument("--dll", type=Path, help="Explicit path to the matching chrome.dll")
     profile_group = parser.add_mutually_exclusive_group()
@@ -1022,17 +1066,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     profile_group.add_argument(
         "--use-default-profile",
         action="store_true",
-        help="Use Chrome's normal profile (the default for an installed Chrome)",
+        help="Use the browser's normal profile (the default for an installed Chrome/Brave)",
     )
     profile_group.add_argument(
         "--isolated-profile",
         action="store_true",
-        help="Force the isolated LOCALAPPDATA profile even for an installed Chrome",
+        help="Force the isolated LOCALAPPDATA profile even for an installed Chrome/Brave",
     )
     parser.add_argument(
         "--scan-only",
         action="store_true",
-        help="Verify structural compatibility without starting Chrome",
+        help="Verify structural compatibility without starting the browser",
     )
     return parser
 
@@ -1047,7 +1091,7 @@ def auto_detect_browser() -> Path:
     candidates = {
         candidate.resolve()
         for root in roots
-        for name in ("GoogleChromePortable.exe", "chrome.exe")
+        for name in ("GoogleChromePortable.exe", "chrome.exe", "brave.exe", "msedge.exe")
         if (candidate := root / name).is_file()
     }
     if len(candidates) == 1:
@@ -1060,6 +1104,9 @@ def auto_detect_browser() -> Path:
         for path in (
             Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
             Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+            Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            *_brave_exe_candidates(),
         )
         if path.is_file()
     }
@@ -1067,10 +1114,10 @@ def auto_detect_browser() -> Path:
         return installed.pop()
     if not installed:
         raise PatchError(
-            "No browser was supplied and Chrome was not found beside the "
-            "runtime launcher or in Program Files"
+            "No browser was supplied and Chrome/Brave/Edge was not found beside "
+            "the runtime launcher or in Program Files"
         )
-    raise PatchError("More than one installed Chrome was found; specify one explicitly")
+    raise PatchError("More than one installed browser was found; specify one explicitly")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1098,11 +1145,18 @@ def main(argv: list[str] | None = None) -> int:
 
     layout = plan.layout
     print(f"SHA-256: {plan.dll_hash}")
-    print(
-        "Verified layout: "
-        f"{len(layout['initializer_pairs'])} BT.709/sRGB initializers, "
-        f"hook RVA 0x{layout['hook_rva']:X}, cave RVA 0x{layout['cave_rva']:X}"
-    )
+    if "initializer_pairs" in layout:
+        print(
+            "Verified layout: "
+            f"{len(layout['initializer_pairs'])} BT.709/sRGB initializers, "
+            f"hook RVA 0x{layout['hook_rva']:X}, cave RVA 0x{layout['cave_rva']:X}"
+        )
+    else:
+        print(
+            "Verified layout: "
+            f"{len(layout['initializer_rvas'])} BT.709/sRGB initializers, "
+            f"loop RVA 0x{layout['loop_limit_rva']:X}"
+        )
     print("Disk mode: read-only (all changes will be private process memory)")
 
     if args.scan_only:
@@ -1139,7 +1193,12 @@ def main(argv: list[str] | None = None) -> int:
         local_app_data = Path(
             os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
         )
-        profile = local_app_data / "Gamma22Runtime" / "ChromeProfile"
+        if browser.name.lower() == "brave.exe":
+            profile = local_app_data / "Gamma22Runtime" / "BraveProfile"
+        elif browser.name.lower() == "msedge.exe":
+            profile = local_app_data / "Gamma22Runtime" / "EdgeProfile"
+        else:
+            profile = local_app_data / "Gamma22Runtime" / "ChromeProfile"
         command.append(f"--user-data-dir={profile.resolve()}")
     command.extend(extra)
 
@@ -1147,12 +1206,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             running = running_processes_for_executable(browser)
         except OSError as error:
-            print(f"ERROR: Cannot check existing Chrome processes: {error}", file=sys.stderr)
+            print(f"ERROR: Cannot check existing browser processes: {error}", file=sys.stderr)
             return 2
         if running:
             print(
-                "ERROR: Standard Chrome is already running from this installation "
-                f"(PID: {', '.join(str(pid) for pid in running)}). Close every Chrome "
+                f"ERROR: Standard {browser.name} is already running from this installation "
+                f"(PID: {', '.join(str(pid) for pid in running)}). Close every {browser.name} "
                 "window and background process, then double-click Gamma22Runtime.exe again.",
                 file=sys.stderr,
             )

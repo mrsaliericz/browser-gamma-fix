@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Experimental no-restart Gamma22 hot-attach for an existing Chrome tree."""
+"""Experimental no-restart Gamma22 hot-attach for an existing Chrome/Brave tree.
+
+Brave shares Chrome's chrome.dll name and loads-trampoline layout, so the
+same Chrome runtime plan applies. Edge uses a separate singleton layout.
+"""
 
 from __future__ import annotations
 
