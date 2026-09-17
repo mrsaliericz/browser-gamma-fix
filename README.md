@@ -308,6 +308,7 @@ Selected work:
 - **iOS apps**, including TrayMate, Můj radar and Health Metrics Widgets.
 - **Browser Gamma Fix** — the Windows HDR SDR gamma 2.2 runtime fix for Chrome,
   Edge, Brave and Vivaldi featured in this repository.
+- **[JarosView](https://apps.microsoft.com/detail/9NDJ4BMB0DS0?hl=neutral&gl=CZ&ocid=pdpshare)** — a Windows app for creating correct HDR screenshots in JXR format, viewing HDR images and more. It is available from the Microsoft Store for a small one-time purchase.
 - **Web and e-commerce projects.**
 
 Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
