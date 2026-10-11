@@ -102,6 +102,18 @@ class AppUpdateTests(unittest.TestCase):
             with self.assertRaises(ValueError):u.validate_installation(root)
             self.assertEqual((root/'my-document.txt').read_text(),'preserve me')
 
+    def test_startup_confirmation_requires_the_released_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);target=root/'Gamma22Tray';target.mkdir()
+            executable=target/'Gamma22Tray.exe';executable.touch()
+            job=root/'.gamma22-update-test';job.mkdir()
+            (job/'job.json').write_text(json.dumps({'target':str(target),'tag':'v0.7.4'}),encoding='utf-8')
+            with mock.patch.object(u.sys,'executable',str(executable)):
+                u.confirm_startup(['--app-update-ready',str(job)],'0.7.4')
+                self.assertTrue((job/'app-ready').is_file())
+                with self.assertRaisesRegex(ValueError,'Invalid application startup confirmation'):
+                    u.confirm_startup(['--app-update-ready',str(job)],'0.7.3')
+
     def test_only_planner_layout_failure_triggers_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser=Path(tmp)/'chrome.exe';dll=Path(tmp)/'chrome.dll'
