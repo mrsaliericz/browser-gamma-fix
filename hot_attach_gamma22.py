@@ -146,6 +146,7 @@ user32.MessageBoxW.restype = ctypes.c_int
 
 _instance_mutex = None
 _background_log_path: Path | None = None
+_background_log_stream = None
 _status_callback = None
 
 
@@ -161,7 +162,7 @@ def report_status(status: str) -> None:
 
 def configure_background_process() -> Path | None:
     """Give a windowed PyInstaller build persistent diagnostics and one instance."""
-    global _background_log_path, _instance_mutex
+    global _background_log_path, _instance_mutex, _background_log_stream
     if not getattr(sys, "frozen", False):
         return None
 
@@ -172,11 +173,10 @@ def configure_background_process() -> Path | None:
     log_root.mkdir(parents=True, exist_ok=True)
     log_path = log_root / "Gamma22HotAttach.log"
     _background_log_path = log_path
-    log_stream = log_path.open("a", encoding="utf-8", buffering=1)
-    import io
-    unbuffered = io.TextIOWrapper(log_stream.buffer, encoding="utf-8", write_through=True)
-    sys.stdout = unbuffered
-    sys.stderr = unbuffered
+    _background_log_stream = log_path.open("a", encoding="utf-8", buffering=1)
+    _background_log_stream.reconfigure(write_through=True)
+    sys.stdout = _background_log_stream
+    sys.stderr = _background_log_stream
     threading.excepthook = lambda args: print(f"Unhandled thread exception in {args.thread.name}: {args.exc_value}", file=sys.stderr)
     print(f"\n--- Gamma22HotAttach started {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
