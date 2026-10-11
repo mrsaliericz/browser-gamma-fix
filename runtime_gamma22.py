@@ -69,9 +69,9 @@ MAX_PATH = 260
 ULONG_PTR = ctypes.c_size_t
 
 # Verified layouts: Edge 151.0.4129.107 has 98; Edge 152.0.4191.53 has 97;
-# Edge 153.0.4234.48 has 99. A known count is only one check, not permission
-# to skip structural validation.
-EDGE_SINGLETON_INITIALIZER_COUNTS = frozenset({97, 98, 99})
+# Edge 153.0.4234.48 has 99; Edge 155.0.4283.45 has 101. A known count is
+# only one check, not permission to skip structural validation.
+EDGE_SINGLETON_INITIALIZER_COUNTS = frozenset({97, 98, 99, 101})
 
 
 class STARTUPINFOW(ctypes.Structure):

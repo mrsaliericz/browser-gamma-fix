@@ -22,8 +22,8 @@ Portable or isolated browser copies are not required. Browser Gamma Fix runs in 
 Windows notification area and applies the correction only in process memory;
 it does not modify browser files on disk.
 
-> **Stable v0.7.2 — 27 September 2026:** Adds verified support for Microsoft
-> Edge `154.0.4258.37`, including its new compact SDR/WCG/HDR output loop.
+> **Stable v0.7.3 — 11 October 2026:** Adds verified support for Microsoft
+> Edge `155.0.4283.45`.
 > Run one tray application to monitor all four supported browsers.
 
 The Edge analyzer decodes x64 instructions and follows arguments and branches,
@@ -196,6 +196,15 @@ the shared indexed `01 02 00` usage table, a `cmp index, 2` loop limit, and
 the required table-byte flow into both calls. The author confirmed the live
 runtime result. Other compact candidates, missing relationships and ambiguous
 layouts are rejected.
+
+### Edge 155.0.4283.45 (v0.7.3)
+
+Edge `155.0.4283.45` retains the verified output path but adds two further
+canonical sRGB singleton initializers, changing the exact recognized count from
+99 to 101. v0.7.3 accepts this count only after the existing checks confirm one
+BT.709/sRGB/gamma 2.2 constant block, one factory/pointer tuple, every sRGB
+load and singleton store, and one verified SDR/WCG/HDR output path. All other
+counts and ambiguous layouts remain rejected.
 
 ### More resilient Edge output analysis
 
