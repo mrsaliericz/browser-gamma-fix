@@ -16,14 +16,14 @@ Google Chrome, Microsoft Edge, Brave and Vivaldi** while Windows HDR is enabled.
 browsers on their native HDR/scRGB presentation path but interprets ordinary
 BT.709/sRGB SDR content using pure gamma 2.2.
 
-> **[Download Browser Gamma Fix v0.7.5 — Chrome, Edge, Brave and Vivaldi](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
+> **[Download Browser Gamma Fix v0.7.6 — Chrome, Edge, Brave and Vivaldi](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
 
 Portable or isolated browser copies are not required. Browser Gamma Fix runs in the
 Windows notification area and applies the correction only in process memory;
 it does not modify browser files on disk.
 
-> **Stable v0.7.5 — 14 October 2026:** Adds fail-safe recovery if Windows
-> temporarily refuses to detach the debugger from a browser process.
+> **Stable v0.7.6 — 14 October 2026:** Avoids retaining large failed analyzer
+> tracebacks while preserving safe retry diagnostics.
 > Run one tray application to monitor all four supported browsers.
 
 The Edge analyzer decodes x64 instructions and follows arguments and branches,
@@ -364,7 +364,7 @@ Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
 - Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
 - Contact: [hello@jaroslavsafar.com](mailto:hello@jaroslavsafar.com)
 - License: [MIT](LICENSE)
-- Current stable release: [Browser Gamma Fix v0.7.5](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.7.5)
+- Current stable release: [Browser Gamma Fix v0.7.6](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.7.6)
 
 Historical documentation for the retired version-specific workflows is kept
 in [`archive/LEGACY_VERSION_SPECIFIC_PATCHER.md`](archive/LEGACY_VERSION_SPECIFIC_PATCHER.md).

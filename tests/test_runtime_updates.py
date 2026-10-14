@@ -156,6 +156,28 @@ class RuntimeUpdateTests(unittest.TestCase):
             self.assertEqual(registry.active_dll, first.resolve())
             self.assertEqual(len(registry.plans_by_dll), 1)
 
+    def test_failed_generation_cache_keeps_only_error_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            browser, first, _second = self.make_installation(Path(directory))
+            registry = BrowserGenerations(
+                browser,
+                planner=mock.Mock(side_effect=hot.PatchError("unknown structural layout")),
+                clock=lambda: 100.0,
+            )
+
+            with self.assertRaisesRegex(hot.PatchError, "unknown structural layout"):
+                registry.register(first)
+
+            _resolved, identity = registry._validated_identity(first)
+            retry_at, error_type, message = registry._failed_identities[identity]
+            self.assertEqual(retry_at, 130.0)
+            self.assertIs(error_type, hot.PatchError)
+            self.assertEqual(message, "unknown structural layout")
+            self.assertFalse(any(isinstance(value, BaseException) for value in registry._failed_identities[identity]))
+
+            with self.assertRaisesRegex(hot.PatchError, "unknown structural layout"):
+                registry.register(first)
+
     def test_module_match_accepts_original_or_patched_writes(self):
         write = SimpleNamespace(
             rva=0x30,
@@ -201,7 +223,7 @@ class RuntimeUpdateTests(unittest.TestCase):
 class TrayInterfaceTests(unittest.TestCase):
     def test_about_metadata_is_present(self):
         self.assertEqual(tray.APP_NAME, "Browser Gamma Fix")
-        self.assertEqual(tray.APP_VERSION, "0.7.5")
+        self.assertEqual(tray.APP_VERSION, "0.7.6")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
         self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
 

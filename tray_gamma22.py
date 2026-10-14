@@ -63,7 +63,7 @@ RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
 APP_NAME = "Browser Gamma Fix"
-APP_VERSION = "0.7.5"
+APP_VERSION = "0.7.6"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
 APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
@@ -352,7 +352,11 @@ class BrowserGenerations:
         self._clock = clock or time.monotonic
         self.plans_by_dll: dict[str, list] = {}
         self._plans_by_identity: dict[tuple[str, int, int], object] = {}
-        self._failed_identities: dict[tuple[str, int, int], tuple[float, Exception]] = {}
+        # Do not retain exception instances here. An exception retains its traceback,
+        # and the traceback can retain the large DLL image examined by an analyzer.
+        self._failed_identities: dict[
+            tuple[str, int, int], tuple[float, type[Exception], str]
+        ] = {}
         self.active_identity: tuple[str, int, int] | None = None
         self.active_dll: Path | None = None
         self.active_error: str | None = None
@@ -386,17 +390,24 @@ class BrowserGenerations:
         now = self._clock()
         failed = self._failed_identities.get(identity)
         if failed is not None and now < failed[0]:
-            raise failed[1]
+            _retry_at, error_type, message = failed
+            raise error_type(message)
         try:
             plan = self._planner(resolved)
         except Exception as error:
+            error_type = type(error)
+            message = str(error)
             self._failed_identities[identity] = (
                 now + FAILED_GENERATION_RETRY_SECONDS,
-                error,
+                error_type,
+                message,
             )
             if isinstance(error, hot.PatchError) and self.on_unsupported is not None:
                 self.on_unsupported(resolved, identity)
-            raise
+            # Raising a new error releases the caught exception and its traceback as
+            # soon as this handler exits. The compact cache above preserves the
+            # retry behavior and user-visible diagnostic.
+            raise error_type(message) from None
 
         self._failed_identities.pop(identity, None)
         self._plans_by_identity[identity] = plan
