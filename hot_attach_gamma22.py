@@ -60,6 +60,9 @@ PAGE_NOACCESS = 0x01
 WRITABLE_PROTECTIONS = {0x04, 0x08, 0x40, 0x80}
 WM_DISPLAYCHANGE = 0x007E
 SMTO_ABORTIFHUNG = 0x0002
+DEBUG_DETACH_ATTEMPTS = 8
+DEBUG_DETACH_RETRY_SECONDS = 0.05
+DETACH_FAILURE_PREFIX = "CRITICAL debugger detach failure:"
 
 kernel32.DebugActiveProcess.argtypes = [wintypes.DWORD]
 kernel32.DebugActiveProcess.restype = wintypes.BOOL
@@ -152,6 +155,34 @@ _background_log_path: Path | None = None
 _status_callback = None
 
 
+class TimestampedLog:
+    """Line-buffered log wrapper that makes rare lifecycle failures diagnosable."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self._at_line_start = True
+
+    @property
+    def encoding(self):
+        return self.stream.encoding
+
+    def write(self, text):
+        if not text:
+            return 0
+        for part in text.splitlines(keepends=True):
+            if self._at_line_start:
+                self.stream.write(time.strftime("%Y-%m-%d %H:%M:%S") + " ")
+            self.stream.write(part)
+            self._at_line_start = part.endswith(("\n", "\r"))
+        return len(text)
+
+    def flush(self):
+        self.stream.flush()
+
+    def isatty(self):
+        return False
+
+
 def set_status_callback(callback) -> None:
     global _status_callback
     _status_callback = callback
@@ -175,7 +206,7 @@ def configure_background_process() -> Path | None:
     log_root.mkdir(parents=True, exist_ok=True)
     log_path = log_root / "Gamma22HotAttach.log"
     _background_log_path = log_path
-    log_stream = log_path.open("a", encoding="utf-8", buffering=1)
+    log_stream = TimestampedLog(log_path.open("a", encoding="utf-8", buffering=1))
     if sys.stdout is None:
         sys.stdout = log_stream
     if sys.stderr is None:
@@ -392,6 +423,39 @@ def is_being_debugged(pid: int) -> bool:
         close_handle(process)
 
 
+def detach_debugger(pid: int) -> tuple[bool, str | None]:
+    """Stop debugging or report an unsafe state after bounded retry attempts.
+
+    A debuggee may remain suspended after DebugActiveProcessStop fails. Retrying
+    this operation is always safer than attempting another DebugActiveProcess on
+    the same PID, which would only return ERROR_INVALID_PARAMETER while our
+    debugger ownership is still unresolved.
+    """
+    last_error = None
+    for attempt in range(1, DEBUG_DETACH_ATTEMPTS + 1):
+        ctypes.set_last_error(0)
+        if kernel32.DebugActiveProcessStop(pid):
+            if attempt > 1:
+                print(f"PID {pid}: debugger detached on retry {attempt}")
+            return True, None
+        last_error = str(win_error(f"DebugActiveProcessStop({pid})"))
+        print(
+            f"PID {pid}: debugger detach attempt {attempt}/"
+            f"{DEBUG_DETACH_ATTEMPTS} failed ({last_error})"
+        )
+        if attempt < DEBUG_DETACH_ATTEMPTS:
+            time.sleep(DEBUG_DETACH_RETRY_SECONDS * attempt)
+    return (
+        False,
+        f"{DETACH_FAILURE_PREFIX} PID {pid} may still be paused after "
+        f"{DEBUG_DETACH_ATTEMPTS} attempts ({last_error})",
+    )
+
+
+def is_critical_detach_failure(detail: str) -> bool:
+    return detail.startswith(DETACH_FAILURE_PREFIX)
+
+
 def windows_for_processes(pids: set[int]) -> list[int]:
     result: set[int] = set()
 
@@ -582,8 +646,9 @@ def attach_one_multi(
     if not kernel32.DebugActiveProcess(pid):
         return False, str(win_error(f"DebugActiveProcess({pid})")), None
     if not kernel32.DebugSetProcessKillOnExit(False):
-        kernel32.DebugActiveProcessStop(pid)
-        return False, str(win_error("DebugSetProcessKillOnExit(FALSE)")), None
+        setup_failure = str(win_error("DebugSetProcessKillOnExit(FALSE)"))
+        _detached, detach_failure = detach_debugger(pid)
+        return False, detach_failure or setup_failure, None
 
     process_handle = None
     patched = False
@@ -718,8 +783,11 @@ def attach_one_multi(
                 break
     finally:
         if attached:
-            if not kernel32.DebugActiveProcessStop(pid) and failure is None:
-                failure = str(win_error(f"DebugActiveProcessStop({pid})"))
+            detached, detach_failure = detach_debugger(pid)
+            if not detached:
+                # Detachment takes priority over the earlier patch result. The
+                # caller must restart this debugger process, not re-attach.
+                failure = detach_failure
         close_handle(process_handle)
 
     if failure:

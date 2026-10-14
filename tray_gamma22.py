@@ -63,7 +63,7 @@ RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
 APP_NAME = "Browser Gamma Fix"
-APP_VERSION = "0.7.4"
+APP_VERSION = "0.7.5"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
 APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
@@ -516,6 +516,22 @@ def request_process_restart() -> None:
     stop_event.set()
     if window_handle:
         user32.PostMessageW(window_handle, WM_CLOSE, 0, 0)
+
+
+def notify_detach_failure(browser_name: str, pid: int, detail: str) -> None:
+    """Warn before restarting the debugger process to release a paused browser."""
+    print(f"{browser_name}: {detail}; restarting Browser Gamma Fix to release PID {pid}")
+    if notify_data is None:
+        return
+    notify_data.uFlags |= 0x10  # NIF_INFO
+    notify_data.szInfoTitle = "Browser Gamma Fix restarted safely"
+    notify_data.szInfo = (
+        f"{browser_name} process {pid} could not be detached. "
+        "Restarting Browser Gamma Fix now to release it."
+    )
+    notify_data.dwInfoFlags = 2  # NIIF_WARNING
+    shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(notify_data))
+    notify_data.uFlags &= ~0x10
 
 
 def attach_attempt_is_final(attempts: int, *, unsupported_observed: bool) -> bool:
@@ -999,6 +1015,14 @@ def worker() -> None:
                         print(f"{name}: new {role} PID {pid}: {detail}")
                         hot.refresh_display_state(current)
                     else:
+                        if hot.is_critical_detach_failure(detail):
+                            # Do not ever re-attach to a PID whose debugger
+                            # ownership was not released. Restarting this
+                            # process is the reliable Windows escape hatch:
+                            # DebugSetProcessKillOnExit(FALSE) lets Edge run.
+                            notify_detach_failure(name, pid, detail)
+                            request_process_restart()
+                            return
                         unsupported_observed = False
                         if observed_dll is not None:
                             try:

@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+import io
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -11,6 +12,38 @@ from tray_gamma22 import BrowserGenerations
 
 
 class RuntimeUpdateTests(unittest.TestCase):
+    def test_debugger_detach_retries_before_reporting_a_critical_failure(self):
+        with mock.patch.object(
+            hot.kernel32, "DebugActiveProcessStop", side_effect=(False, False, True)
+        ) as stop, mock.patch.object(hot.time, "sleep") as sleep, mock.patch.object(
+            hot, "win_error", return_value=OSError(5, "Access is denied")
+        ):
+            detached, detail = hot.detach_debugger(1234)
+
+        self.assertTrue(detached)
+        self.assertIsNone(detail)
+        self.assertEqual(stop.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_debugger_detach_failure_is_explicit_and_never_retried_as_attach(self):
+        with mock.patch.object(
+            hot.kernel32, "DebugActiveProcessStop", return_value=False
+        ), mock.patch.object(hot.time, "sleep"), mock.patch.object(
+            hot, "win_error", return_value=OSError(5, "Access is denied")
+        ):
+            detached, detail = hot.detach_debugger(1234)
+
+        self.assertFalse(detached)
+        self.assertTrue(hot.is_critical_detach_failure(detail))
+        self.assertIn("PID 1234", detail)
+
+    def test_timestamped_log_prefixes_every_line(self):
+        stream = io.StringIO()
+        with mock.patch.object(hot.time, "strftime", return_value="STAMP"):
+            log = hot.TimestampedLog(stream)
+            log.write("first\nsecond\n")
+        self.assertEqual(stream.getvalue(), "STAMP first\nSTAMP second\n")
+
     def test_vivaldi_standard_locations(self):
         with mock.patch.dict(tray.os.environ, {"LOCALAPPDATA": r"C:\Users\Test\AppData\Local"}):
             locations = dict(tray.supported_browser_locations())["Vivaldi"]
@@ -168,7 +201,7 @@ class RuntimeUpdateTests(unittest.TestCase):
 class TrayInterfaceTests(unittest.TestCase):
     def test_about_metadata_is_present(self):
         self.assertEqual(tray.APP_NAME, "Browser Gamma Fix")
-        self.assertEqual(tray.APP_VERSION, "0.7.4")
+        self.assertEqual(tray.APP_VERSION, "0.7.5")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
         self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
 
