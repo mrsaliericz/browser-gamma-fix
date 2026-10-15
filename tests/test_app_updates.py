@@ -19,6 +19,9 @@ def metadata(tag='v0.8.0'):
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_automatic_update_interval_is_one_hour(self):
+        self.assertEqual(u.INTERVAL, 60 * 60)
+
     def test_release_order_and_stable_only(self):
         self.assertIsNone(u.parse_release(metadata('v0.6.0'),'0.7.0-beta.1'))
         self.assertIsNotNone(u.parse_release(metadata('v0.7.0'),'0.7.0-beta.1'))

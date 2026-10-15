@@ -223,9 +223,77 @@ class RuntimeUpdateTests(unittest.TestCase):
 class TrayInterfaceTests(unittest.TestCase):
     def test_about_metadata_is_present(self):
         self.assertEqual(tray.APP_NAME, "Browser Gamma Fix")
-        self.assertEqual(tray.APP_VERSION, "0.7.6")
+        self.assertEqual(tray.APP_VERSION, "0.7.7")
         self.assertEqual(tray.APP_AUTHOR, "Jaroslav Safar")
         self.assertEqual(tray.APP_EMAIL, "hello@jaroslavsafar.com")
+
+    def test_about_dialog_is_compact_and_contact_is_a_menu_action(self):
+        content = tray.about_content()
+        self.assertIn(tray.APP_AUTHOR, content)
+        self.assertNotIn(tray.APP_URL, content)
+        self.assertNotIn(tray.APP_EMAIL, content)
+
+    def test_every_requested_tray_click_opens_the_menu(self):
+        for event in (
+            tray.WM_LBUTTONUP,
+            tray.WM_LBUTTONDBLCLK,
+            tray.WM_RBUTTONUP,
+            tray.WM_CONTEXTMENU,
+        ):
+            self.assertTrue(tray.tray_event_opens_menu(event))
+        self.assertFalse(tray.tray_event_opens_menu(0))
+
+    def test_about_menu_actions_open_the_project_and_email(self):
+        with mock.patch.object(tray.shell32, "ShellExecuteW") as execute:
+            tray.open_project_website()
+            tray.email_author()
+        self.assertEqual(
+            execute.call_args_list,
+            [
+                mock.call(
+                    tray.window_handle,
+                    "open",
+                    tray.APP_URL,
+                    None,
+                    None,
+                    tray.SW_SHOWNORMAL,
+                ),
+                mock.call(
+                    tray.window_handle,
+                    "open",
+                    f"mailto:{tray.APP_EMAIL}",
+                    None,
+                    None,
+                    tray.SW_SHOWNORMAL,
+                ),
+            ],
+        )
+
+    def test_tray_icon_combines_hdr_and_runtime_health(self):
+        original_icons = tray.tray_icons
+        tray.tray_icons = {
+            "hdr-healthy": 11,
+            "sdr-healthy": 12,
+            "hdr-error": 13,
+            "sdr-error": 14,
+            "hdr-disabled": 15,
+            "sdr-disabled": 16,
+        }
+        try:
+            with mock.patch.object(tray, "windows_hdr_enabled", return_value=True), mock.patch.object(
+                tray, "fix_mode", return_value=(True, False)
+            ), mock.patch.object(tray, "status_text", return_value="Chrome: active"):
+                self.assertEqual(tray.selected_tray_icon(), 11)
+            with mock.patch.object(tray, "windows_hdr_enabled", return_value=False), mock.patch.object(
+                tray, "fix_mode", return_value=(True, False)
+            ), mock.patch.object(tray, "status_text", return_value="Edge: unsupported update"):
+                self.assertEqual(tray.selected_tray_icon(), 14)
+            with mock.patch.object(tray, "windows_hdr_enabled", return_value=True), mock.patch.object(
+                tray, "fix_mode", return_value=(False, False)
+            ):
+                self.assertEqual(tray.selected_tray_icon(), 15)
+        finally:
+            tray.tray_icons = original_icons
 
     def test_enable_autostart_writes_current_executable_to_hkcu(self):
         key = object()

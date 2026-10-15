@@ -16,15 +16,15 @@ Google Chrome, Microsoft Edge, Brave and Vivaldi** while Windows HDR is enabled.
 browsers on their native HDR/scRGB presentation path but interprets ordinary
 BT.709/sRGB SDR content using pure gamma 2.2.
 
-> **[Download Browser Gamma Fix v0.7.6 — Chrome, Edge, Brave and Vivaldi](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
+> **[Download Browser Gamma Fix v0.7.7 — Chrome, Edge, Brave and Vivaldi](https://github.com/mrsaliericz/browser-gamma-fix/releases/latest)**
 
 Portable or isolated browser copies are not required. Browser Gamma Fix runs in the
 Windows notification area and applies the correction only in process memory;
 it does not modify browser files on disk.
 
-> **Stable v0.7.6 — 14 October 2026:** Avoids retaining large failed analyzer
-> tracebacks while preserving safe retry diagnostics.
-> Run one tray application to monitor all four supported browsers.
+> **Stable v0.7.7 — 15 October 2026:** The tray icon now shows Windows HDR state
+> and correction health at a glance, with crisp high-DPI UI and menu access from
+> every normal tray click. Run one tray application to monitor all four supported browsers.
 
 The Edge analyzer decodes x64 instructions and follows arguments and branches,
 allowing verified changes in registers, stack offsets and code placement.
@@ -86,12 +86,20 @@ Brave Stable is detected in its standard Program Files or per-user
 `%LOCALAPPDATA%` installation directory. Brave Beta/Nightly channels and
 arbitrary custom installation paths are not automatically detected.
 
-The tray icon is colored while the correction is enabled and gray while it is
-disabled. Right-click it to access:
+The tray icon combines two independent status indicators:
+
+- A gold sparkle in the upper-right means **Windows HDR is enabled**. No sparkle
+  means Windows HDR is currently off.
+- The lower-right dot is **green** when the correction is enabled and healthy,
+  **red** for an unsupported layout or another correction error, and **gray**
+  while the fix is disabled or switching.
+
+Left-click, double-left-click, or right-click the tray icon to open its menu:
 
 - **Disable/Enable Gamma 2.2 fix**
 - **Start with Windows**
 - **About Browser Gamma Fix**
+- **Open project website** and **Email author**
 - **Check for updates…** and **Install version…** when a newer release is available
 - **Do you like this app? Support me!** — opens the optional Buy Me a Coffee page.
 - **Open diagnostic log**
@@ -118,10 +126,10 @@ are rejected. Custom and standalone installation paths are not auto-detected.
 ### Application updater (new in v0.7.0)
 
 The tray updater checks GitHub's latest stable release on startup,
-then daily, and when a browser DLL is rejected by the layout analyzer. Process
+then every hour, and when a browser DLL is rejected by the layout analyzer. Process
 access errors do not trigger compatibility update checks. Automatic attempts
 are limited to one per 15 minutes across browsers and one per DLL identity per
-day; this history survives application restarts. **Check for updates…** in the
+hour; this history survives application restarts. **Check for updates…** in the
 tray menu allows a manual check.
 
 If an update is available, the tray offers **Install version…**. Installation
@@ -364,7 +372,7 @@ Explore my work: **[jaroslavsafar.com](https://jaroslavsafar.com)**.
 - Portfolio: [jaroslavsafar.com](https://jaroslavsafar.com)
 - Contact: [hello@jaroslavsafar.com](mailto:hello@jaroslavsafar.com)
 - License: [MIT](LICENSE)
-- Current stable release: [Browser Gamma Fix v0.7.6](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.7.6)
+- Current stable release: [Browser Gamma Fix v0.7.7](https://github.com/mrsaliericz/browser-gamma-fix/releases/tag/v0.7.7)
 
 Historical documentation for the retired version-specific workflows is kept
 in [`archive/LEGACY_VERSION_SPECIFIC_PATCHER.md`](archive/LEGACY_VERSION_SPECIFIC_PATCHER.md).

@@ -22,7 +22,10 @@ API = f'https://api.github.com/repos/{REPO}/releases/latest'
 MAX_ARCHIVE = 100 * 1024 * 1024
 MAX_EXPANDED = 500 * 1024 * 1024
 COOLDOWN = 15 * 60
-INTERVAL = 24 * 60 * 60
+# A browser layout update can be reported by the tray immediately, but a normal
+# background release check should still be reasonably frequent for users who do
+# not happen to open an unsupported browser generation at that moment.
+INTERVAL = 60 * 60
 
 
 def version(value):

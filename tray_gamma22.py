@@ -22,6 +22,7 @@ import app_updates
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_CONTEXTMENU = 0x007B
+WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
 WM_APP = 0x8000
@@ -56,6 +57,8 @@ CMD_CHECK_UPDATE = 106
 CMD_INSTALL_UPDATE = 107
 CMD_UPDATE_STATUS = 108
 CMD_SUPPORT = 109
+CMD_PROJECT = 110
+CMD_EMAIL = 111
 UPDATE_POLL_SECONDS = 5.0
 FAILED_GENERATION_RETRY_SECONDS = 30.0
 UPDATE_RESTART_SETTLE_SECONDS = 15.0
@@ -63,7 +66,7 @@ RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
 APP_NAME = "Browser Gamma Fix"
-APP_VERSION = "0.7.6"
+APP_VERSION = "0.7.7"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
 APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
@@ -126,6 +129,59 @@ class NOTIFYICONDATAW(ctypes.Structure):
     ]
 
 
+class LUID(ctypes.Structure):
+    _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", ctypes.c_long)]
+
+
+class DISPLAYCONFIG_RATIONAL(ctypes.Structure):
+    _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
+
+
+class DISPLAYCONFIG_PATH_SOURCE_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId", LUID),
+        ("id", wintypes.UINT),
+        ("modeInfoIdx", wintypes.UINT),
+        ("statusFlags", wintypes.UINT),
+    ]
+
+
+class DISPLAYCONFIG_PATH_TARGET_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId", LUID),
+        ("id", wintypes.UINT),
+        ("modeInfoIdx", wintypes.UINT),
+        ("outputTechnology", wintypes.UINT),
+        ("rotation", wintypes.UINT),
+        ("scaling", wintypes.UINT),
+        ("refreshRate", DISPLAYCONFIG_RATIONAL),
+        ("scanLineOrdering", wintypes.UINT),
+        ("targetAvailable", wintypes.BOOL),
+        ("statusFlags", wintypes.UINT),
+    ]
+
+
+class DISPLAYCONFIG_PATH_INFO(ctypes.Structure):
+    _fields_ = [
+        ("sourceInfo", DISPLAYCONFIG_PATH_SOURCE_INFO),
+        ("targetInfo", DISPLAYCONFIG_PATH_TARGET_INFO),
+        ("flags", wintypes.UINT),
+    ]
+
+
+class DISPLAYCONFIG_DEVICE_INFO_HEADER(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.UINT),
+        ("size", wintypes.UINT),
+        ("adapterId", LUID),
+        ("id", wintypes.UINT),
+    ]
+
+
+class DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO(ctypes.Structure):
+    _fields_ = [("header", DISPLAYCONFIG_DEVICE_INFO_HEADER), ("value", wintypes.UINT)]
+
+
 kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -167,6 +223,26 @@ user32.LoadImageW.argtypes = [
     wintypes.UINT,
 ]
 user32.LoadImageW.restype = wintypes.HANDLE
+user32.GetDisplayConfigBufferSizes.argtypes = [
+    wintypes.UINT, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT)
+]
+user32.GetDisplayConfigBufferSizes.restype = wintypes.LONG
+user32.QueryDisplayConfig.argtypes = [
+    wintypes.UINT,
+    ctypes.POINTER(wintypes.UINT),
+    ctypes.POINTER(DISPLAYCONFIG_PATH_INFO),
+    ctypes.POINTER(wintypes.UINT),
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+]
+user32.QueryDisplayConfig.restype = wintypes.LONG
+user32.DisplayConfigGetDeviceInfo.argtypes = [
+    ctypes.POINTER(DISPLAYCONFIG_DEVICE_INFO_HEADER)
+]
+user32.DisplayConfigGetDeviceInfo.restype = wintypes.LONG
+user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+user32.GetDpiForSystem.restype = wintypes.UINT
 user32.DestroyIcon.argtypes = [wintypes.HICON]
 user32.CreatePopupMenu.restype = wintypes.HMENU
 user32.AppendMenuW.argtypes = [
@@ -229,7 +305,6 @@ shell32.ShellExecuteW.argtypes = [
     wintypes.LPCWSTR,
     ctypes.c_int,
 ]
-
 stop_event = threading.Event()
 status_lock = threading.Lock()
 fix_lock = threading.Lock()
@@ -240,6 +315,7 @@ window_handle = None
 notify_data = None
 active_icon = None
 inactive_icon = None
+tray_icons: dict[str, int] = {}
 owned_icons: set[int] = set()
 log_path = None
 update_events = queue.Queue()
@@ -248,6 +324,7 @@ update_busy = False
 available_release = None
 update_status = "Updates: not checked yet"
 update_schedule = None
+last_hdr_state: tuple[float, bool] | None = None
 
 
 def request_release_check(key="periodic", manual=False):
@@ -580,6 +657,69 @@ def browser_runtime_status(
     return "applying"
 
 
+QDC_ONLY_ACTIVE_PATHS = 0x00000002
+DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9
+ADVANCED_COLOR_ENABLED = 0x00000002
+
+
+def _query_windows_hdr_enabled() -> bool:
+    """Return whether Advanced Color/HDR is enabled on any active display."""
+    path_count = wintypes.UINT()
+    mode_count = wintypes.UINT()
+    if user32.GetDisplayConfigBufferSizes(
+        QDC_ONLY_ACTIVE_PATHS, ctypes.byref(path_count), ctypes.byref(mode_count)
+    ) != 0 or not path_count.value:
+        return False
+    paths = (DISPLAYCONFIG_PATH_INFO * path_count.value)()
+    # DISPLAYCONFIG_MODE_INFO is 64 bytes on 64-bit Windows. The mode data is
+    # required by QueryDisplayConfig but is not inspected for this query.
+    modes = ctypes.create_string_buffer(mode_count.value * 64) if mode_count.value else None
+    if user32.QueryDisplayConfig(
+        QDC_ONLY_ACTIVE_PATHS,
+        ctypes.byref(path_count),
+        paths,
+        ctypes.byref(mode_count),
+        modes,
+        None,
+    ) != 0:
+        return False
+    for path in paths[:path_count.value]:
+        info = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO()
+        info.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO
+        info.header.size = ctypes.sizeof(info)
+        info.header.adapterId = path.targetInfo.adapterId
+        info.header.id = path.targetInfo.id
+        if (
+            user32.DisplayConfigGetDeviceInfo(ctypes.byref(info.header)) == 0
+            and info.value & ADVANCED_COLOR_ENABLED
+        ):
+            return True
+    return False
+
+
+def windows_hdr_enabled() -> bool:
+    """Cache the display query briefly; normal tray status refreshes it."""
+    global last_hdr_state
+    now = time.monotonic()
+    if last_hdr_state is None or now - last_hdr_state[0] >= 2.0:
+        last_hdr_state = (now, _query_windows_hdr_enabled())
+    return last_hdr_state[1]
+
+
+def tray_health_state() -> str:
+    enabled, switching = fix_mode()
+    if not enabled or switching:
+        return "disabled"
+    status = status_text().casefold()
+    return "error" if "error" in status or "unsupported" in status else "healthy"
+
+
+def selected_tray_icon() -> int | None:
+    hdr = "hdr" if windows_hdr_enabled() else "sdr"
+    health = tray_health_state()
+    return tray_icons.get(f"{hdr}-{health}") or active_icon
+
+
 def set_status(value: str) -> None:
     global current_status
     with status_lock:
@@ -618,10 +758,10 @@ def finish_fix_toggle() -> None:
 def update_tray_state() -> None:
     if notify_data is None:
         return
-    enabled, _switching = fix_mode()
     notify_data.uFlags = NIF_ICON | NIF_TIP
-    notify_data.hIcon = active_icon if enabled else inactive_icon
-    notify_data.szTip = f"Chromium Gamma 2.2 — {status_text()}"[:127]
+    notify_data.hIcon = selected_tray_icon()
+    hdr_status = "HDR on" if windows_hdr_enabled() else "HDR off"
+    notify_data.szTip = f"{APP_NAME} v{APP_VERSION} — {hdr_status} — {status_text()}"[:127]
     shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(notify_data))
 
 
@@ -689,21 +829,31 @@ def toggle_autostart() -> None:
         )
 
 
+def about_content() -> str:
+    return (
+        "Windows HDR SDR gamma 2.2 runtime fix for Google Chrome, "
+        "Microsoft Edge, Brave and Vivaldi.\n\n"
+        f"Author: {APP_AUTHOR}\n\n"
+        "Free and open-source software."
+    )
+
+
 def show_about() -> None:
     user32.MessageBoxW(
         window_handle,
-        (
-            f"{APP_NAME}\n"
-            f"Version {APP_VERSION}\n\n"
-            "Windows HDR SDR gamma 2.2 runtime fix for Google Chrome, "
-            "Microsoft Edge, Brave and Vivaldi.\n\n"
-            f"Author: {APP_AUTHOR}\n"
-            f"Contact: {APP_EMAIL}\n\n"
-            f"{APP_URL}\n\n"
-            "Free and open-source software."
-        ),
+        f"{APP_NAME} v{APP_VERSION}\n\n{about_content()}",
         f"About {APP_NAME}",
         0x00000040,
+    )
+
+
+def open_project_website() -> None:
+    shell32.ShellExecuteW(window_handle, "open", APP_URL, None, None, SW_SHOWNORMAL)
+
+
+def email_author() -> None:
+    shell32.ShellExecuteW(
+        window_handle, "open", f"mailto:{APP_EMAIL}", None, None, SW_SHOWNORMAL
     )
 
 
@@ -712,6 +862,9 @@ def show_menu(hwnd) -> None:
     if not menu:
         return
     try:
+        user32.AppendMenuW(
+            menu, MF_STRING | MF_GRAYED, CMD_STATUS, f"{APP_NAME} v{APP_VERSION}"
+        )
         user32.AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_STATUS, status_text()[:80])
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         enabled, switching = fix_mode()
@@ -734,6 +887,9 @@ def show_menu(hwnd) -> None:
             menu, autostart_flags, CMD_AUTOSTART, "Start with Windows"
         )
         user32.AppendMenuW(menu, MF_STRING, CMD_ABOUT, f"About {APP_NAME}…")
+        user32.AppendMenuW(menu, MF_STRING, CMD_PROJECT, "Open project website")
+        user32.AppendMenuW(menu, MF_STRING, CMD_EMAIL, f"Email author ({APP_EMAIL})")
+        user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_UPDATE_STATUS, update_status)
         user32.AppendMenuW(menu, MF_STRING | (MF_GRAYED if update_busy else 0), CMD_CHECK_UPDATE, "Check for updates…")
         if available_release is not None:
@@ -761,6 +917,10 @@ def show_menu(hwnd) -> None:
             toggle_autostart()
         elif command == CMD_ABOUT:
             show_about()
+        elif command == CMD_PROJECT:
+            open_project_website()
+        elif command == CMD_EMAIL:
+            email_author()
         elif command == CMD_CHECK_UPDATE:
             request_release_check(manual=True)
         elif command == CMD_INSTALL_UPDATE:
@@ -776,6 +936,10 @@ def show_menu(hwnd) -> None:
         user32.DestroyMenu(menu)
 
 
+def tray_event_opens_menu(event: int) -> bool:
+    return event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_CONTEXTMENU)
+
+
 @WNDPROC
 def window_proc(hwnd, message, wparam, lparam):
     if message == WM_APP_UPDATE:
@@ -783,10 +947,8 @@ def window_proc(hwnd, message, wparam, lparam):
         return 0
     if message == WM_TRAY:
         event = int(lparam) & 0xFFFF
-        if event in (WM_RBUTTONUP, WM_CONTEXTMENU):
+        if tray_event_opens_menu(event):
             show_menu(hwnd)
-        elif event == WM_LBUTTONDBLCLK:
-            open_log()
         return 0
     if message == WM_STATUS_CHANGED:
         update_tray_state()
@@ -803,25 +965,61 @@ def window_proc(hwnd, message, wparam, lparam):
     return user32.DefWindowProcW(hwnd, message, wparam, lparam)
 
 
+def enable_per_monitor_dpi_awareness() -> None:
+    """Enable crisp Win32 menus, dialogs and multi-size tray icons on high DPI."""
+    # Per-monitor V2 must be selected before creating any application window.
+    try:
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        shcore = ctypes.WinDLL("shcore", use_last_error=True)
+        set_awareness = shcore.SetProcessDpiAwareness
+        set_awareness.argtypes = [ctypes.c_int]
+        set_awareness.restype = ctypes.c_long
+        set_awareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except (AttributeError, OSError):
+        pass
+
+
+def small_icon_size() -> int:
+    try:
+        return max(16, round(16 * user32.GetDpiForSystem() / 96))
+    except (AttributeError, OSError):
+        return 16
+
+
 def load_icon_file(resource_root: Path, filename: str) -> int | None:
     icon_path = resource_root / "assets" / filename
     if not icon_path.is_file():
         return None
-    icon = user32.LoadImageW(
-        None, str(icon_path), IMAGE_ICON, 16, 16, LR_LOADFROMFILE
-    )
+    size = small_icon_size()
+    icon = user32.LoadImageW(None, str(icon_path), IMAGE_ICON, size, size, LR_LOADFROMFILE)
     return int(icon) if icon else None
 
 
-def load_app_icons() -> tuple[int, int, set[int]]:
+def load_app_icons() -> tuple[int, int, dict[str, int], set[int]]:
     resource_root = Path(
         getattr(hot.sys, "_MEIPASS", Path(__file__).resolve().parent)
     )
-    active = load_icon_file(resource_root, "gamma22.ico")
-    inactive = load_icon_file(resource_root, "gamma22-disabled.ico")
-    loaded = {icon for icon in (active, inactive) if icon is not None}
+    names = {
+        "hdr-healthy": "gamma22-hdr-active.ico",
+        "sdr-healthy": "gamma22-sdr-active.ico",
+        "hdr-error": "gamma22-hdr-error.ico",
+        "sdr-error": "gamma22-sdr-error.ico",
+        "hdr-disabled": "gamma22-hdr-disabled.ico",
+        "sdr-disabled": "gamma22-sdr-disabled.ico",
+    }
+    icons = {
+        key: icon for key, filename in names.items()
+        if (icon := load_icon_file(resource_root, filename)) is not None
+    }
+    active = icons.get("hdr-healthy") or load_icon_file(resource_root, "gamma22.ico")
+    inactive = icons.get("sdr-disabled") or load_icon_file(resource_root, "gamma22-disabled.ico")
+    loaded = {icon for icon in (*icons.values(), active, inactive) if icon is not None}
     if active is not None:
-        return active, inactive or active, loaded
+        return active, inactive or active, icons, loaded
     try:
         large = wintypes.HICON()
         small = wintypes.HICON()
@@ -832,13 +1030,13 @@ def load_app_icons() -> tuple[int, int, set[int]]:
                 user32.DestroyIcon(large)
             if small:
                 fallback = int(small)
-                return fallback, fallback, {fallback}
+                return fallback, fallback, {}, {fallback}
     except Exception:
         pass
     fallback = int(
         user32.LoadIconW(None, ctypes.cast(IDI_APPLICATION, wintypes.LPCWSTR))
     )
-    return fallback, fallback, set()
+    return fallback, fallback, {}, set()
 
 
 def supported_browser_locations():
@@ -1101,11 +1299,12 @@ def worker() -> None:
 
 
 def main() -> int:
-    global active_icon, inactive_icon, log_path, notify_data, owned_icons, window_handle, fix_enabled
+    global active_icon, inactive_icon, tray_icons, log_path, notify_data, owned_icons, window_handle, fix_enabled
     if '--start-fix-disabled' in sys.argv:
         fix_enabled = False
     if not wait_for_restart_parent(sys.argv[1:]):
         return 1
+    enable_per_monitor_dpi_awareness()
     log_path = hot.configure_background_process()
     if getattr(hot.sys, "frozen", False) and hot._instance_mutex is None:
         return 0
@@ -1125,7 +1324,7 @@ def main() -> int:
     if not window_handle:
         raise ctypes.WinError(ctypes.get_last_error())
 
-    active_icon, inactive_icon, owned_icons = load_app_icons()
+    active_icon, inactive_icon, tray_icons, owned_icons = load_app_icons()
     notify_data = NOTIFYICONDATAW()
     notify_data.cbSize = ctypes.sizeof(notify_data)
     notify_data.hWnd = window_handle
