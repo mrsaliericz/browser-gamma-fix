@@ -41,8 +41,8 @@ table values, loop limits and control flow instead of relying on one fragile
 byte pattern.
 
 The analyzer was expanded as Chromium compiler layouts evolved, including
-Chrome helper stack-frame changes and Edge singleton counts of 97, 98, 99 and
-101. These are accepted only together with the corresponding complete
+Chrome helper stack-frame changes and Edge singleton counts of 97, 98, 99, 101
+and 102. These are accepted only together with the corresponding complete
 structural checks; an arbitrary matching count is not enough. The project has
 also passed live testing through multiple successive Chrome and Edge updates.
 That is evidence of compatibility with tested layouts, not a guarantee for a
