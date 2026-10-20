@@ -154,10 +154,18 @@ def extract_package(archive, destination):
 
 def validate_installation(directory):
     directory = Path(directory).resolve(strict=True)
+    # Explorer can create hidden per-folder metadata even when a user sees only
+    # the extracted EXE and _internal folder. These two files are never loaded
+    # or acted upon by the updater, so accepting them keeps a normal dedicated
+    # installation updateable without allowing arbitrary payload files.
+    allowed_metadata = {'desktop.ini', 'thumbs.db'}
+    entries = {entry.name.casefold(): entry for entry in directory.iterdir()}
+    expected = {'gamma22tray.exe', '_internal'}
     if (directory == Path(directory.anchor) or directory == Path.home().resolve()
-            or {p.name for p in directory.iterdir()} != {'Gamma22Tray.exe','_internal'}
-            or not (directory/'Gamma22Tray.exe').is_file()
-            or not (directory/'_internal').is_dir()):
+            or set(entries) - expected - allowed_metadata
+            or not expected <= set(entries)
+            or not entries['gamma22tray.exe'].is_file()
+            or not entries['_internal'].is_dir()):
         raise ValueError('Use a dedicated folder containing only Gamma22Tray.exe and _internal; update this installation manually')
     for root, dirs, files in os.walk(directory, followlinks=False):
         for name in dirs+files:

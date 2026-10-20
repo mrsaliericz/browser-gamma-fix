@@ -66,7 +66,9 @@ for the new tray to confirm startup; a launch failure rolls back. This is an
 integrity check against GitHub metadata, not an independent code signature.
 
 Automatic replacement requires a dedicated writable installation folder that
-contains only `Gamma22Tray.exe` and `_internal`, without links or junctions.
+contains `Gamma22Tray.exe` and `_internal`, without links or junctions.
+The harmless `desktop.ini` and `Thumbs.db` metadata files that Windows Explorer
+can add are tolerated; other top-level files still block automatic replacement.
 Temporary backup and diagnostic files use a sibling `.gamma22-update-*`
 directory and are intentionally retained for troubleshooting.
 

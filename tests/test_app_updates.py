@@ -101,6 +101,11 @@ class AppUpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'Gamma22Tray.exe').touch();(root/'_internal').mkdir()
             self.assertEqual(u.validate_installation(root),root.resolve())
+            # Explorer can add hidden folder metadata; it is harmless and must
+            # not make an otherwise dedicated package impossible to update.
+            (root/'desktop.ini').write_text('[.ShellClassInfo]')
+            (root/'Thumbs.db').write_bytes(b'test')
+            self.assertEqual(u.validate_installation(root),root.resolve())
             (root/'my-document.txt').write_text('preserve me')
             with self.assertRaises(ValueError):u.validate_installation(root)
             self.assertEqual((root/'my-document.txt').read_text(),'preserve me')
