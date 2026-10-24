@@ -75,7 +75,7 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
             return result
 
     def test_known_counts_produce_complete_plan(self):
-        for count in (97, 98, 99, 101, 102):
+        for count in (97, 98, 99, 100, 101, 102, 120):
             with self.subTest(count=count):
                 fixture = EdgeImage(count)
                 plan = self.plan(fixture)
@@ -85,11 +85,11 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
                     self.assertEqual(item.patched[:3], b"\x48\x8D\x0D")
                     target = item.rva + 7 + struct.unpack_from("<i", item.patched, 3)[0]
                     self.assertEqual(target, fixture.GAMMA22)
-                self.assertEqual(plan.writes[-2].patched, b"\x48\x83\xFF\x03")
-                self.assertEqual(plan.writes[-1].patched, b"\x00\x01\x02")
+                self.assertEqual(plan.writes[-2].patched, b"\x00\x01\x02")
+                self.assertEqual(plan.writes[-1].patched, b"\x48\x83\xFF\x03")
 
     def test_unverified_counts_are_rejected(self):
-        for count in (0, 1, 96, 100, 103):
+        for count in (0, 1, 96, 121):
             with self.subTest(count=count), self.assertRaisesRegex(
                 runtime.PatchError, "Unexpected Edge singleton constructors"
             ):

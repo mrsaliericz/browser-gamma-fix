@@ -58,6 +58,11 @@ An unfamiliar browser layout is rejected safely rather than guessed. If you
 see a red tray dot or **Unsupported**, use **Check for updates…** in the menu
 and update Browser Gamma Fix if a newer version is available.
 
+Browser Gamma Fix recognizes several verified Chromium compiler layouts rather
+than a single browser-version hash. That has made routine Chrome and Edge
+updates much more likely to continue working, while unfamiliar layouts still
+remain safely unmodified.
+
 ## Important notes
 
 - **SDR video:** browser video can follow a different compositor path. NVIDIA

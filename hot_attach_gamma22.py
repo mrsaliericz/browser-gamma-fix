@@ -368,13 +368,17 @@ def reconcile_module_for_role(
     """Apply only the code writes belonging to this Chromium process role."""
     changed_to_patch = 0
     restored_to_upstream = 0
-    for item in plan.writes:
+    # Disable the output-path writes in reverse dependency order: restore the
+    # count before removing the redirected table and its private storage.
+    writes = list(reversed(plan.writes)) if role == "browser" and not enabled else plan.writes
+    for item in writes:
         is_gamma_initializer = item.label.startswith("sRGB initializer ")
         is_output_hook = item.label in {
             "SDR scRGB/F16 trampoline",
             "ScreenWin SDR output hook",
             "ScreenWin usage loop limit",
             "ScreenWin usage table",
+            "ScreenWin usage table relocation",
         }
         should_be_patched = enabled and (
             (role == "gpu" and is_gamma_initializer)

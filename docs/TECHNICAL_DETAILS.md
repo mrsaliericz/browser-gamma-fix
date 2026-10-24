@@ -41,12 +41,18 @@ table values, loop limits and control flow instead of relying on one fragile
 byte pattern.
 
 The analyzer was expanded as Chromium compiler layouts evolved, including
-Chrome helper stack-frame changes and Edge singleton counts of 97, 98, 99, 101
-and 102. These are accepted only together with the corresponding complete
-structural checks; an arbitrary matching count is not enough. The project has
-also passed live testing through multiple successive Chrome and Edge updates.
-That is evidence of compatibility with tested layouts, not a guarantee for a
-future Chromium implementation.
+Chrome helper stack-frame changes, Edge singleton counts within a bounded
+97–120 range, and distinct compact, split and fused Edge output loops. These
+are accepted only together with complete color-object, factory/pointer,
+output-helper and control-flow checks; a count alone is never enough. For a
+recent fused Edge loop where the existing usage table has only two safe bytes,
+the runtime creates the replacement three-byte table in verified unused `.text`
+padding outside declared function ranges, repoints the one verified table-load
+instruction, and changes the loop limit last. Disabling reverses that order.
+
+The project has also passed live testing through multiple successive Chrome and
+Edge updates. That is evidence of compatibility with tested layouts, not a
+guarantee for a future Chromium implementation.
 
 Standard Program Files and per-user installation locations are detected for
 the supported browsers. Brave Beta/Nightly and arbitrary custom locations are

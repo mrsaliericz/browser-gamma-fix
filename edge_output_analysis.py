@@ -5,6 +5,7 @@ Only a small, explicitly modeled instruction subset is accepted. Unknown
 instructions, branches, values or ambiguous loops reject the candidate.
 """
 from collections import deque
+from bisect import bisect_right
 import struct
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
@@ -21,6 +22,52 @@ def family(ins, reg):
     if name.startswith('r') and name[1:-1].isdigit() and name[-1] in 'dbw':
         return name[:-1]
     return aliases.get(name, name)
+
+
+def find_unused_int3_cave(dll, sections, text, text_rva, target_rva, size=16):
+    """Return nearby INT3 padding outside every PE function body.
+
+    Edge 156 keeps its two-byte usage table immediately before unrelated data,
+    so extending it would corrupt that data.  A reserved INT3 alignment gap is
+    a safer private-process home for the three-byte replacement table.
+    """
+    pdata = next((section for section in sections if section[0] == '.pdata'), None)
+    if pdata is None:
+        raise PatchError('Edge usage-table relocation requires PE function boundaries')
+    with dll.open('rb') as stream:
+        stream.seek(pdata[3])
+        entries = stream.read(pdata[4])
+
+    # An INT3 run inside a declared function can be reachable cold code. Only
+    # consider linker padding outside every exception-directory function range.
+    ranges = []
+    for offset in range(0, len(entries) - 11, 12):
+        start, end, _ = struct.unpack_from('<III', entries, offset)
+        if text_rva <= start < end <= text_rva + len(text):
+            ranges.append((start, end))
+    ranges.sort()
+    merged = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    starts = [start for start, _end in merged]
+
+    candidates = []
+    position = 0
+    needle = b'\xcc' * size
+    while (position := text.find(needle, position)) >= 0:
+        rva = text_rva + position
+        index = bisect_right(starts, rva) - 1
+        overlaps_previous = index >= 0 and merged[index][1] > rva
+        overlaps_next = index + 1 < len(merged) and merged[index + 1][0] < rva + size
+        if not overlaps_previous and not overlaps_next:
+            candidates.append(rva)
+        position += size
+    if not candidates:
+        raise PatchError('Edge usage-table relocation found no safe INT3 padding')
+    return min(candidates, key=lambda rva: (abs(rva - target_rva), rva))
 
 
 def find_compact_output_loop(dll, sections, text, text_rva):
@@ -128,6 +175,232 @@ def find_compact_output_loop(dll, sections, text, text_rva):
         loop_original=b'\x48\x83\xff\x02',
         loop_patched=b'\x48\x83\xff\x03',
     )
+
+
+def find_fused_output_loop(dll, sections, text, text_rva):
+    """Verify Edge 156's fused ScreenWin output loop.
+
+    This variant keeps both output-helper calls, the count limit and the usage
+    table in one large function instead of a dedicated cold fragment.  It is
+    accepted only when one function proves the two output planes, the table
+    flow, both format paths and the loop exit relationship.
+    """
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    decoder.detail = True
+
+    helpers = []
+    pos = 0
+    while (pos := text.find(HDR_OUTPUT_HELPER_BYTES, pos)) >= 0:
+        helpers.append(text_rva + pos)
+        pos += 1
+    if len(helpers) != 1:
+        raise PatchError('Fused Edge analysis requires one exact output helper')
+    helper = helpers[0]
+
+    # Avoid decoding every function in a large Edge DLL. Locate direct helper
+    # calls from bytes first, then disassemble only their candidate functions.
+    calls_to_helper = []
+    pos = 0
+    while (pos := text.find(b'\xe8', pos)) >= 0:
+        if (pos + 5 <= len(text)
+                and text_rva + pos + 5 + struct.unpack_from('<i', text, pos + 1)[0] == helper):
+            calls_to_helper.append(text_rva + pos)
+        pos += 1
+
+    pdata = next((s for s in sections if s[0] == '.pdata'), None)
+    if pdata is None:
+        raise PatchError('Fused Edge analysis requires PE function boundaries')
+
+    def stack_slot(ins, operand):
+        if operand.type != X86_OP_MEM:
+            return None
+        memory = operand.mem
+        if ins.reg_name(memory.base) != 'rsp' or memory.index:
+            return None
+        return memory.disp
+
+    def call_target(ins):
+        if ins.mnemonic != 'call' or len(ins.operands) != 1:
+            return None
+        return ins.operands[0].imm if ins.operands[0].type == X86_OP_IMM else None
+
+    def helper_call_signature(instructions, call_index):
+        """Return only the directly established helper arguments."""
+        rcx_slot = rdx_slot = stack_arg = None
+        r8_value = r9_kind = None
+        for ins in instructions[max(0, call_index - 9):call_index]:
+            ops = ins.operands
+            if len(ops) != 2:
+                continue
+            destination = family(ins, ops[0].reg) if ops[0].type == X86_OP_REG else None
+            if (ins.mnemonic == 'lea' and destination == 'rcx'
+                    and (slot := stack_slot(ins, ops[1])) is not None):
+                rcx_slot = slot
+            elif (ins.mnemonic == 'mov' and destination == 'rdx'
+                    and (slot := stack_slot(ins, ops[1])) is not None
+                    and ops[1].size == 1):
+                rdx_slot = slot
+            elif (ins.mnemonic == 'xor' and destination == 'r8'
+                    and ops[1].type == X86_OP_REG
+                    and family(ins, ops[1].reg) == 'r8'):
+                r8_value = 0
+            elif (ins.mnemonic == 'mov' and destination == 'r8'
+                    and ops[1].type == X86_OP_IMM):
+                r8_value = ops[1].imm
+            elif ins.mnemonic == 'lea' and destination == 'r9' and stack_slot(ins, ops[1]) is not None:
+                r9_kind = 'stack'
+            elif ins.mnemonic == 'mov' and destination == 'r9' and ops[1].type == X86_OP_REG:
+                r9_kind = 'register'
+            elif (ins.mnemonic == 'mov' and (slot := stack_slot(ins, ops[0])) == 32
+                    and ops[1].type == X86_OP_REG):
+                stack_arg = family(ins, ops[1].reg)
+        return rcx_slot, rdx_slot, r8_value, r9_kind, stack_arg
+
+    with dll.open('rb') as stream:
+        stream.seek(pdata[3])
+        entries = stream.read(pdata[4])
+
+        def read(rva, size):
+            stream.seek(rva_to_offset(sections, rva))
+            return stream.read(size)
+
+        results = []
+        for offset in range(0, len(entries) - 11, 12):
+            start, end, _ = struct.unpack_from('<III', entries, offset)
+            if not (text_rva <= start < end <= text_rva + len(text)) or end - start > 65536:
+                continue
+            function_calls = [call for call in calls_to_helper if start <= call < end]
+            if len(function_calls) != 2:
+                continue
+            code = text[start - text_rva:end - text_rva]
+            instructions = list(decoder.disasm(code, start))
+            helper_calls = [
+                index for index, ins in enumerate(instructions)
+                if call_target(ins) == helper
+            ]
+            if len(helper_calls) != 2:
+                continue
+            first_call, second_call = helper_calls
+            first = helper_call_signature(instructions, first_call)
+            second = helper_call_signature(instructions, second_call)
+            if not (
+                first[2] == 0 and second[2] == 1
+                and first[0] is not None and first[0] == second[0]
+                and first[1] is not None and first[1] == second[1]
+                and first[3] in ('stack', 'register') and second[3] in ('stack', 'register')
+                and first[4] is not None and second[4] is not None
+            ):
+                continue
+
+            for index, inc in enumerate(instructions[:-9]):
+                compare, exit_jump, query, table_lea, table_load, table_store, format_compare, format_jump = instructions[index + 1:index + 9]
+                if not (
+                    inc.mnemonic == 'inc' and len(inc.operands) == 1 and inc.operands[0].type == X86_OP_REG
+                    and compare.mnemonic == 'cmp' and len(compare.operands) == 2
+                    and compare.operands[0].type == X86_OP_REG and compare.operands[1].type == X86_OP_IMM
+                    and family(inc, inc.operands[0].reg) == family(compare, compare.operands[0].reg)
+                    and compare.operands[1].imm == 2 and compare.imm_size == 1
+                    and exit_jump.mnemonic == 'je' and len(exit_jump.operands) == 1 and exit_jump.operands[0].type == X86_OP_IMM
+                    and query.mnemonic == 'call' and query.operands[0].type == X86_OP_IMM
+                    and table_lea.mnemonic == 'lea' and table_lea.operands[0].type == X86_OP_REG
+                    and table_lea.operands[1].type == X86_OP_MEM and table_lea.reg_name(table_lea.operands[1].mem.base) == 'rip'
+                    and table_load.mnemonic == 'mov' and table_load.operands[0].type == X86_OP_REG and table_load.operands[1].type == X86_OP_MEM
+                    and table_store.mnemonic == 'mov' and table_store.operands[0].type == X86_OP_MEM and table_store.operands[1].type == X86_OP_REG
+                    and format_compare.mnemonic == 'cmp' and len(format_compare.operands) == 2
+                    and format_compare.operands[0].type == X86_OP_REG and family(format_compare, format_compare.operands[0].reg) == 'rax'
+                    and format_compare.operands[1].type == X86_OP_IMM and format_compare.operands[1].imm == 12
+                    and format_jump.mnemonic == 'jl' and len(format_jump.operands) == 1 and format_jump.operands[0].type == X86_OP_IMM
+                ):
+                    continue
+                table_reg = family(table_lea, table_lea.operands[0].reg)
+                index_reg = family(inc, inc.operands[0].reg)
+                load_memory = table_load.operands[1].mem
+                if not (
+                    family(table_load, table_load.operands[0].reg) == table_reg
+                    and {family(table_load, load_memory.base), family(table_load, load_memory.index)} == {index_reg, table_reg}
+                    and load_memory.scale == 1 and load_memory.disp == 0
+                    and stack_slot(table_store, table_store.operands[0]) == first[1]
+                    and family(table_store, table_store.operands[1].reg) == table_reg
+                ):
+                    continue
+                table = table_lea.address + table_lea.size + table_lea.operands[1].mem.disp
+                table_bytes = read(table, 3)
+                relocation = None
+                if table_bytes == b'\x01\x02\x00':
+                    usage_table_rva = table
+                    usage_table_original = table_bytes
+                elif table_bytes[:2] == b'\x01\x02':
+                    # This compiler layout puts unrelated bytes immediately
+                    # after the two entries. Relocate the replacement table
+                    # into verified linker padding instead of overwriting it.
+                    original_lea = bytes(table_lea.bytes)
+                    if len(original_lea) != 7 or original_lea[:3] != b'\x48\x8d\x0d':
+                        continue
+                    try:
+                        usage_table_rva = find_unused_int3_cave(
+                            dll, sections, text, text_rva, table_lea.address
+                        )
+                    except PatchError:
+                        continue
+                    usage_table_original = read(usage_table_rva, 3)
+                    if usage_table_original != b'\xcc' * 3:
+                        continue
+                    displacement = usage_table_rva - (table_lea.address + table_lea.size)
+                    if not -(1 << 31) <= displacement < (1 << 31):
+                        continue
+                    relocation = (
+                        table_lea.address,
+                        original_lea,
+                        b'\x48\x8d\x0d' + struct.pack('<i', displacement),
+                        usage_table_rva,
+                    )
+                else:
+                    continue
+                if not (compare.address > instructions[second_call].address
+                        and start < exit_jump.operands[0].imm < end
+                        and start <= format_jump.operands[0].imm <= instructions[first_call].address
+                        and instructions[first_call].address - format_jump.operands[0].imm <= 48):
+                    continue
+                fallback_jump = next(
+                    (ins for ins in instructions[index + 8:]
+                     if ins.mnemonic == 'jmp' and len(ins.operands) == 1
+                     and ins.operands[0].type == X86_OP_IMM
+                     and ins.operands[0].imm == instructions[first_call].address),
+                    None,
+                )
+                if fallback_jump is None:
+                    continue
+                prefix_start = format_jump.operands[0].imm
+                prefix = code[prefix_start - start:compare.address - start]
+                suffix = code[compare.address + compare.size - start:fallback_jump.address + fallback_jump.size - start]
+                if not prefix or not suffix:
+                    continue
+                semantic_checks = [
+                    ('Edge fused output prefix', prefix_start, prefix),
+                    ('Edge fused output suffix', compare.address + compare.size, suffix),
+                ]
+                if relocation:
+                    _lea_rva, _original_lea, _patched_lea, cave_rva = relocation
+                    semantic_checks.extend((
+                        ('Edge fused source usage table', table, b'\x01\x02'),
+                        ('Edge fused usage-table cave tail', cave_rva + 3, b'\xcc' * 13),
+                    ))
+                results.append(dict(
+                    loop_limit_rva=compare.address,
+                    usage_table_rva=usage_table_rva,
+                    usage_table_original=usage_table_original,
+                    output_helper_rva=helper,
+                    loop_context=b'',
+                    loop_original=bytes(compare.bytes),
+                    loop_patched=(bytes(compare.bytes[:compare.imm_offset]) + b'\x03'
+                                  + bytes(compare.bytes[compare.imm_offset + 1:])),
+                    semantic_checks=semantic_checks,
+                    usage_table_relocation=relocation,
+                ))
+        unique = {result['loop_limit_rva']: result for result in results}
+        if len(unique) != 1 or len(results) != 1:
+            raise PatchError(f'Expected one verified fused Edge output loop; found {len(results)}')
+        return next(iter(unique.values()))
 
 
 def find_split_output_loop(dll, sections, text, text_rva):

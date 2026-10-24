@@ -69,13 +69,12 @@ MAX_PATH = 260
 ULONG_PTR = ctypes.c_size_t
 
 # Verified layouts: Edge 151.0.4129.107 has 98; Edge 152.0.4191.53 has 97;
-# Edge 153.0.4234.48 has 99; Edge 155.0.4283.45 has 101; Edge
-# 155.0.4283.62 has 102. A known count is only one check, not permission to
-# skip structural validation.
-# Each accepted count still has to pass the complete load/store, factory,
-# constant-block and output-path checks below. Edge 155.0.4283.62 adds one
-# otherwise identical singleton to the verified 101-initializer layout.
-EDGE_SINGLETON_INITIALIZER_COUNTS = frozenset({97, 98, 99, 101, 102})
+# Edge compiler revisions have produced 97 through 102 canonical singleton
+# constructors. Keep the count as a coarse sanity bound rather than a brittle
+# per-release allowlist: every candidate still has to pass the complete
+# load/store, factory, constant-block and output-path checks below.
+EDGE_SINGLETON_INITIALIZER_MIN = 97
+EDGE_SINGLETON_INITIALIZER_MAX = 120
 
 
 class STARTUPINFOW(ctypes.Structure):
@@ -596,7 +595,7 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
         position += 1
     constructor_tuples = {(factory, pointer) for _rva, factory, pointer in constructors}
     if (
-        len(constructors) not in EDGE_SINGLETON_INITIALIZER_COUNTS
+        not EDGE_SINGLETON_INITIALIZER_MIN <= len(constructors) <= EDGE_SINGLETON_INITIALIZER_MAX
         or len(constructor_tuples) != 1
     ):
         raise PatchError(
@@ -671,11 +670,18 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
         if table == b"\x01\x02\x00":
             loop_candidates.append((loop_rva, table_rva, call1_target, candidate))
     if not loop_candidates:
-        from edge_output_analysis import find_compact_output_loop, find_split_output_loop
+        from edge_output_analysis import (
+            find_compact_output_loop,
+            find_fused_output_loop,
+            find_split_output_loop,
+        )
         try:
             semantic = find_compact_output_loop(dll, sections, text, text_rva)
         except PatchError:
-            semantic = find_split_output_loop(dll, sections, text, text_rva)
+            try:
+                semantic = find_fused_output_loop(dll, sections, text, text_rva)
+            except PatchError:
+                semantic = find_split_output_loop(dll, sections, text, text_rva)
         loop_candidates.append((semantic['loop_limit_rva'], semantic['usage_table_rva'],
                                 semantic['output_helper_rva'], semantic['loop_context']))
     else:
@@ -729,22 +735,46 @@ def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
         table_original = read_at(
             stream, rva_to_offset(sections, layout["usage_table_rva"]), 3
         )
-    if loop_original != layout.get('loop_original', b"\x48\x83\xFF\x02") or table_original != b"\x01\x02\x00":
+        relocation = layout.get("usage_table_relocation")
+        if relocation:
+            relocation_rva, relocation_original, _relocation_patched, _cave_rva = relocation
+            relocation_bytes = read_at(
+                stream, rva_to_offset(sections, relocation_rva), len(relocation_original)
+            )
+    expected_table = layout.get("usage_table_original", b"\x01\x02\x00")
+    if (
+        loop_original != layout.get('loop_original', b"\x48\x83\xFF\x02")
+        or table_original != expected_table
+        or (relocation and relocation_bytes != relocation_original)
+    ):
         raise PatchError("Edge ScreenWin output state is not pristine")
-    writes.extend(
-        (
+    # Populate private table storage, repoint the table load if needed, then
+    # change the loop count last. This keeps execution on the upstream path if
+    # a write is interrupted before the plan is complete.
+    writes.append(
+        MemoryWrite(
+            "ScreenWin usage table",
+            layout["usage_table_rva"],
+            table_original,
+            b"\x00\x01\x02",
+        )
+    )
+    if relocation:
+        relocation_rva, relocation_original, relocation_patched, _cave_rva = relocation
+        writes.append(
             MemoryWrite(
-                "ScreenWin usage loop limit",
-                layout["loop_limit_rva"],
-                loop_original,
-                layout.get('loop_patched', b"\x48\x83\xFF\x03"),
-            ),
-            MemoryWrite(
-                "ScreenWin usage table",
-                layout["usage_table_rva"],
-                table_original,
-                b"\x00\x01\x02",
-            ),
+                "ScreenWin usage table relocation",
+                relocation_rva,
+                relocation_original,
+                relocation_patched,
+            )
+        )
+    writes.append(
+        MemoryWrite(
+            "ScreenWin usage loop limit",
+            layout["loop_limit_rva"],
+            loop_original,
+            layout.get('loop_patched', b"\x48\x83\xFF\x03"),
         )
     )
     checks = [

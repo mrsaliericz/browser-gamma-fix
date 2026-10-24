@@ -55,6 +55,64 @@ def split_fixture(stack_shift=0, index_variant=False):
     return image
 
 
+def fused_fixture(two_byte_table=True):
+    """Model Edge 156's one-function output loop with a packed table."""
+    image = fixtures.EdgeImage(100)
+    image.put(image.LOOP, b'\xcc' * 72)
+    # Add one exception-directory entry for the fused function.
+    struct.pack_into('<H', image.data, 0x86, 4)
+    header = 0x98 + 3 * 40
+    image.put(header, b'.pdata\0\0')
+    struct.pack_into('<IIII', image.data, header + 8, 12, 0x8800, 12, 0x8800)
+    base = 0x3400
+    code = bytearray()
+    labels = {}
+    refs = []
+
+    def emit(hexstr):
+        code.extend(bytes.fromhex(hexstr))
+
+    def label(name):
+        labels[name] = base + len(code)
+
+    def target(opcode, name):
+        emit(opcode)
+        refs.append((len(code), name))
+        code.extend(b'\0' * 4)
+
+    def call(name):
+        target('e8', name)
+
+    # The two verified helper calls establish plane 0 and plane 1, then the
+    # loop updates the same stack byte from the usage table.
+    label('primary')
+    emit('4c 89 7c 24 20 48 8d 8c 24 50 02 00 00 8a 54 24 30')
+    emit('45 31 c0 4d 89 e1')
+    label('first-call'); call(image.HELPER)
+    emit('4c 89 74 24 20 48 8d 8c 24 50 02 00 00 8a 54 24 30')
+    emit('41 b0 01 4c 8d 8c 24 80 06 00 00')
+    label('second-call'); call(image.HELPER)
+    emit('48 ff c7')
+    label('limit'); emit('48 83 ff 02')
+    target('0f 84', 'exit')
+    call(image.FACTORY)
+    target('48 8d 0d', image.TABLE)
+    emit('8a 0c 0f 88 4c 24 30 83 f8 0c')
+    target('0f 8c', 'primary')
+    emit('4c 89 74 24 20 48 8d 8c 24 50 02 00 00 8a 54 24 30')
+    emit('45 31 c0 4c 8d 8c 24 80 06 00 00')
+    target('e9', 'first-call')
+    label('exit'); emit('c3')
+    for offset, name in refs:
+        dest = labels[name] if isinstance(name, str) else name
+        struct.pack_into('<i', code, offset, dest - (base + offset + 4))
+    image.put(base, code)
+    struct.pack_into('<III', image.data, 0x8800, base, base + len(code), 0)
+    image.labels = labels
+    image.put(image.TABLE, b'\x01\x02G' if two_byte_table else b'\x01\x02\x00')
+    return image
+
+
 class SemanticOutputTests(unittest.TestCase):
     plan=fixtures.EdgeRuntimeLayoutTests.plan
 
@@ -64,9 +122,9 @@ class SemanticOutputTests(unittest.TestCase):
                 image=split_fixture(shift,index)
                 plan=self.plan(image)
                 self.assertEqual(len(plan.writes),99)
-                self.assertEqual(plan.writes[-2].rva,image.labels['limit'])
-                self.assertEqual(plan.writes[-2].patched[-1],3)
-                self.assertEqual(plan.writes[-1].rva,image.TABLE)
+                self.assertEqual(plan.writes[-1].rva,image.labels['limit'])
+                self.assertEqual(plan.writes[-1].patched[-1],3)
+                self.assertEqual(plan.writes[-2].rva,image.TABLE)
                 self.assertEqual(len(plan.checks),6)
 
     def test_wrong_call_table_counter_and_control_flow_rejected(self):
@@ -90,6 +148,25 @@ class SemanticOutputTests(unittest.TestCase):
             self.assertEqual(bytes(image.data[rva:rva+len(data)]),data,label)
             for write in plan.writes:
                 self.assertTrue(write.rva+len(write.patched)<=rva or rva+len(data)<=write.rva)
+
+    def test_fused_loop_relocates_packed_usage_table_to_safe_padding(self):
+        image = fused_fixture(two_byte_table=True)
+        plan = self.plan(image)
+        self.assertEqual(len(plan.layout['initializer_rvas']), 100)
+        self.assertIsNotNone(plan.layout['usage_table_relocation'])
+        self.assertNotEqual(plan.layout['usage_table_rva'], image.TABLE)
+        self.assertEqual(plan.writes[-3].label, 'ScreenWin usage table')
+        self.assertEqual(plan.writes[-2].label, 'ScreenWin usage table relocation')
+        self.assertEqual(plan.writes[-1].label, 'ScreenWin usage loop limit')
+        self.assertEqual(plan.writes[-3].original, b'\xcc' * 3)
+        self.assertEqual(plan.writes[-3].patched, b'\0\1\2')
+        self.assertEqual(image.data[image.TABLE:image.TABLE + 3], b'\1\2G')
+
+    def test_fused_loop_rejects_a_changed_packed_table_prefix(self):
+        image = fused_fixture(two_byte_table=True)
+        image.data[image.TABLE] = 0
+        with self.assertRaises(runtime.PatchError):
+            self.plan(image)
 
 
 if __name__=='__main__': unittest.main()
