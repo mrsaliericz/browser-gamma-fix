@@ -820,9 +820,20 @@ def _edge_output_component(dll: Path, sections, text, text_rva):
             layout.get('loop_patched', b"\x48\x83\xFF\x03"),
         )
     )
-    checks = [("ScreenWin output helper", layout["output_helper_rva"], HDR_OUTPUT_HELPER_BYTES)]
+    checks = _output_helper_checks(text, text_rva, layout["output_helper_rva"])
     checks.extend(layout.get('semantic_checks', []))
     return layout, writes, checks
+
+
+def _output_helper_checks(text, text_rva, helper):
+    """Verify the output helper: exact bytes, or each instruction when split."""
+    offset = helper - text_rva
+    if text[offset:offset + len(HDR_OUTPUT_HELPER_BYTES)] == HDR_OUTPUT_HELPER_BYTES:
+        return [("ScreenWin output helper", helper, HDR_OUTPUT_HELPER_BYTES)]
+    runs = resilient_layout.match_output_helper(text, text_rva, helper)
+    if runs is None:
+        raise PatchError("ScreenWin output helper failed semantic verification")
+    return [(f"ScreenWin output helper instruction 0x{rva:X}", rva, data) for rva, data in runs]
 
 
 def _chrome_gamma_component(dll: Path, sections, text, text_rva):
@@ -878,7 +889,7 @@ def _chrome_output_component(dll: Path, sections, text, text_rva):
             branch(0xE9, layout["hook_rva"], layout["cave_rva"]),
         ),
     ]
-    checks = [("ScreenWin output helper", layout["set_output_call_rva"], HDR_OUTPUT_HELPER_BYTES)]
+    checks = _output_helper_checks(text, text_rva, layout["set_output_call_rva"])
     return layout, writes, checks
 
 
@@ -913,7 +924,6 @@ def _fallback_output_component(dll: Path, sections, text, text_rva):
     """Detour the output helper entry so kSRGB mirrors kWideColorGamut."""
     layout = resilient_layout.discover_output_detour_layout(dll, sections, text, text_rva)
     helper = layout["output_helper_rva"]
-    prologue = len(resilient_layout.HELPER_PROLOGUE)
     # Populate the stub first and enable the entry jump last; disabling in the
     # browser role reverses this order.
     writes = [
@@ -933,7 +943,10 @@ def _fallback_output_component(dll: Path, sections, text, text_rva):
             layout["detour_hook_patched"],
         )
     )
-    checks = [("ScreenWin output helper body", helper + prologue, HDR_OUTPUT_HELPER_BYTES[prologue:])]
+    checks = [
+        (f"ScreenWin output helper instruction 0x{rva:X}", rva, data)
+        for rva, data in layout["output_helper_checks"]
+    ]
     return layout, writes, checks
 
 

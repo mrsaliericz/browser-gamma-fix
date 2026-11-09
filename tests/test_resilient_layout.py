@@ -38,7 +38,26 @@ def edge_image(count=97, *, broken_loop=False, pdata=True):
             (image.LOOP, image.LOOP + 0x80),
             (image.HELPER, image.HELPER + len(runtime.HDR_OUTPUT_HELPER_BYTES)),
             (image.FACTORY, image.FACTORY + 1),
+            (SPLIT_BODY, SPLIT_BODY + 0x60),
         ])
+    return image
+
+
+SPLIT_BODY = 0x3800
+
+
+def split_helper(image, mutate=False):
+    """Place the output helper like Edge 158: entry stub and body far apart."""
+    body = bytes(runtime.HDR_OUTPUT_HELPER_BYTES[10:]) + bytes.fromhex("67 0F B9 40 0B")
+    if mutate:
+        body = body.replace(bytes.fromhex("B9 11 00 00 00"), bytes.fromhex("B9 12 00 00 00"))
+    entry = image.HELPER
+    stub = bytes.fromhex("56 57 48 89 C8 80 FA 02")
+    stub += b"\x0F\x84" + runtime.rel32(entry + 8, 6, SPLIT_BODY + 18)
+    stub += b"\xE9" + runtime.rel32(entry + 14, 5, SPLIT_BODY)
+    image.put(entry, b"\xCC" * len(runtime.HDR_OUTPUT_HELPER_BYTES))
+    image.put(entry, stub)
+    image.put(SPLIT_BODY, body)
     return image
 
 
@@ -195,7 +214,32 @@ class ResilientLayoutTests(unittest.TestCase):
             self.assertEqual(stub.original, b"\xCC" * len(stub.original))
             self.assertFalse(image.HELPER <= stub.rva < image.HELPER + len(runtime.HDR_OUTPUT_HELPER_BYTES))
         self.assert_checks_do_not_overlap_writes(plan, image)
-        self.assertTrue(any(label == "ScreenWin output helper body" for label, _r, _e in plan.checks))
+        self.assertTrue(any(label.startswith("ScreenWin output helper instruction") for label, _r, _e in plan.checks))
+
+    def test_split_helper_is_found_by_control_flow(self):
+        image = split_helper(edge_image())
+        plan = self.plan(image)
+        self.assertEqual(plan.layout["output_strategy"], "strict")
+        labels = [label for label, _rva, _data in plan.checks]
+        self.assertTrue(any(label.startswith("ScreenWin output helper instruction") for label in labels))
+        self.assert_checks_do_not_overlap_writes(plan, image)
+
+    def test_split_helper_detour_resumes_after_prologue(self):
+        image = split_helper(edge_image(broken_loop=True))
+        plan = self.plan(image)
+        self.assertEqual(plan.layout["output_strategy"], "fallback")
+        self.assertFalse(plan.layout["output_helper_contiguous"])
+        hook = plan.writes[-1]
+        self.assertEqual(hook.rva, image.HELPER)
+        checked = {rva for _label, rva, _data in plan.checks}
+        self.assertIn(SPLIT_BODY, checked, "the distant body is verified too")
+        self.assertNotIn(image.HELPER, checked, "the replaced prologue is not a check")
+        self.assert_checks_do_not_overlap_writes(plan, image)
+
+    def test_changed_split_helper_is_rejected(self):
+        image = split_helper(edge_image(broken_loop=True), mutate=True)
+        with self.assertRaisesRegex(runtime.PatchError, "one verified output helper; found 0"):
+            self.plan(image)
 
     def test_detour_chunks_link_and_resume_correctly(self):
         helper = 0x5000
@@ -253,7 +297,7 @@ class ResilientLayoutTests(unittest.TestCase):
     def test_detour_requires_the_exact_helper_and_a_caller(self):
         image = edge_image(broken_loop=True)
         image.data[image.HELPER + 20] ^= 1
-        with self.assertRaisesRegex(runtime.PatchError, "one exact output helper"):
+        with self.assertRaisesRegex(runtime.PatchError, "one verified output helper"):
             self.plan(image)
         image = edge_image(broken_loop=True)
         image.put(image.LOOP, b"\xCC" * 0x60)
