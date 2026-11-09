@@ -1,0 +1,57 @@
+name: Preview build
+
+# Builds the same BrowserGammaFix-win64.zip as a release, without publishing
+# a release. Download it from the run's "Artifacts" section to test a branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - "main"
+      - "dependabot/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependency
+        run: python -m pip install --disable-pip-version-check pyinstaller==6.14.2 -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Analyze installed Chrome and Edge
+        continue-on-error: true
+        run: python tools/compatibility_report.py
+
+      - name: Build onedir package
+        shell: powershell
+        run: .\build_hot_attach_exe.ps1
+
+      - name: Record checksum
+        shell: powershell
+        run: |
+          $hash = (Get-FileHash -LiteralPath dist/BrowserGammaFix-win64.zip -Algorithm SHA256).Hash
+          "SHA-256 (BrowserGammaFix-win64.zip): $hash" | Tee-Object -FilePath dist/SHA256.txt
+          "Built from commit $env:GITHUB_SHA" | Add-Content -LiteralPath dist/SHA256.txt
+          Get-Content dist/SHA256.txt | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload preview package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BrowserGammaFix-win64-preview
+          path: |
+            dist/BrowserGammaFix-win64.zip
+            dist/SHA256.txt
+          retention-days: 30
