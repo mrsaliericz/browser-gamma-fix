@@ -71,7 +71,9 @@ def main(argv: list[str]) -> int:
             targets.extend((f"{dll.name}", path) for path in sorted(dll.rglob("*.dll"))
                            if path.name.lower() in {"chrome.dll", "msedge.dll", "vivaldi.dll"})
         else:
-            targets.append((dll.parent.parent.name or dll.name, dll))
+            # ...\<Vendor>\<Product>\Application\<version>\<name>.dll
+            product = dll.parents[2].name if dll.parent.parent.name.lower() == "application" else dll.name
+            targets.append((product, dll))
     if not targets:
         print("No Chromium browser DLL found.")
         return 2

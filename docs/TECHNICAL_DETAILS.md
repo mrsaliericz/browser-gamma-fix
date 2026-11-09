@@ -69,7 +69,7 @@ that is used only when the verified analyzer for that half rejects a build:
 The diagnostic log reports the chosen strategy per half, e.g.
 `gamma=fallback, output=strict`. `tools/compatibility_report.py` runs the same
 analysis read-only, and the daily *Browser compatibility* workflow applies it
-to Stable plus Beta/Dev/Canary Chrome and Edge builds.
+to Stable plus Beta/Dev Chrome and Edge builds.
 
 The project has also passed live testing through multiple successive Chrome and
 Edge updates. That is evidence of compatibility with tested layouts, not a
