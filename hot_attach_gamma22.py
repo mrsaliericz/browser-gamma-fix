@@ -35,6 +35,7 @@ from runtime_gamma22 import (
     LOAD_DLL_DEBUG_EVENT,
     auto_detect_browser,
     close_handle,
+    describe_plan,
     kernel32,
     locate_chrome_dll,
     make_runtime_plan,
@@ -379,7 +380,8 @@ def reconcile_module_for_role(
             "ScreenWin usage loop limit",
             "ScreenWin usage table",
             "ScreenWin usage table relocation",
-        }
+            "ScreenWin output detour hook",
+        } or item.label.startswith("ScreenWin output detour stub ")
         should_be_patched = enabled and (
             (role == "gpu" and is_gamma_initializer)
             or (role == "browser" and is_output_hook)

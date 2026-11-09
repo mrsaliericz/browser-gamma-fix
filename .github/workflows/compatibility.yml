@@ -1,0 +1,59 @@
+name: Browser compatibility
+
+# Analyzes (read-only) the Chrome and Edge builds that GitHub's Windows runner
+# has installed, plus freshly downloaded Beta/Dev/Canary builds, every day.
+# A failing Stable step means users are about to see "Unsupported"; a failing
+# pre-release step is an early warning weeks before that happens.
+
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - "dependabot/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run tests (includes executing the detour stub on Windows)
+        run: python -m unittest discover -s tests -v
+
+      - name: Analyze installed Stable browsers
+        run: python tools/compatibility_report.py
+
+      - name: Download pre-release browsers
+        id: prerelease
+        continue-on-error: true
+        shell: powershell
+        run: .\tools\fetch_prerelease_browsers.ps1
+
+      - name: Analyze pre-release browsers (early warning)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $list = Join-Path $env:RUNNER_TEMP "prerelease-browsers\dlls.txt"
+          if (-not (Test-Path -LiteralPath $list)) { Write-Warning "No pre-release browsers were downloaded"; exit 0 }
+          $dlls = @(Get-Content -LiteralPath $list | Where-Object { $_ })
+          if ($dlls.Count -eq 0) { Write-Warning "No pre-release DLLs found"; exit 0 }
+          python tools/compatibility_report.py --only @dlls
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::A pre-release Chrome/Edge build is not supported yet. See the job summary."
+            exit 1
+          }

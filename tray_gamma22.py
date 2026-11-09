@@ -66,7 +66,7 @@ RESTART_WAIT_ARGUMENT = "--gamma22-restart-after-pid"
 RESTART_PARENT_TIMEOUT_MS = 60_000
 MAX_ATTACH_ATTEMPTS = 3
 APP_NAME = "Browser Gamma Fix"
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 APP_AUTHOR = "Jaroslav Safar"
 APP_EMAIL = "hello@jaroslavsafar.com"
 APP_URL = "https://github.com/mrsaliericz/browser-gamma-fix"
@@ -419,6 +419,14 @@ def handle_update_events():
             notify_data.uFlags &= ~0x10
 
 
+def plan_summary(plan) -> str:
+    """Describe which analyzers produced a plan, tolerating test doubles."""
+    try:
+        return hot.describe_plan(plan)
+    except Exception:
+        return "layout verified"
+
+
 class BrowserGenerations:
     """Cache verified runtime plans across browser update transitions."""
 
@@ -523,7 +531,8 @@ class BrowserGenerations:
         action = "analyzed" if added else "selected cached"
         return (
             "updated",
-            f"{old_version} -> {new_version}; {action} generation {plan.dll_hash[:12]}",
+            f"{old_version} -> {new_version}; {action} generation {plan.dll_hash[:12]} "
+            f"({plan_summary(plan)})",
         )
 
     def register_observed(self, dll: Path):
@@ -1127,7 +1136,8 @@ def worker() -> None:
             )
             print(
                 f"{name}: watching {browser} "
-                f"({dll.parent.name}/{dll.name}, {plan.dll_hash[:12]})"
+                f"({dll.parent.name}/{dll.name}, {plan.dll_hash[:12]}; "
+                f"{plan_summary(plan)})"
             )
         except Exception as error:
             states[name] = "unsupported/error"

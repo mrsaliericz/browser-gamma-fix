@@ -59,9 +59,10 @@ see a red tray dot or **Unsupported**, use **Check for updates…** in the menu
 and update Browser Gamma Fix if a newer version is available.
 
 Browser Gamma Fix recognizes several verified Chromium compiler layouts rather
-than a single browser-version hash. That has made routine Chrome and Edge
-updates much more likely to continue working, while unfamiliar layouts still
-remain safely unmodified.
+than a single browser-version hash. Since v0.9.0 it also has layout-independent
+fallbacks for both parts of the fix, so a routine Chrome or Edge update that
+only reshuffles compiled code no longer needs a new Browser Gamma Fix release.
+Unfamiliar layouts that fail every check still remain safely unmodified.
 
 ## Important notes
 
