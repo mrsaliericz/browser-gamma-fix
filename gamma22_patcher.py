@@ -288,21 +288,20 @@ def find_all_rvas(
 def find_chrome_hdr_output_hook_in_text(
     text: bytes, text_rva: int
 ) -> tuple[int, int]:
-    """Return the unique ScreenWin hook and exact output-helper RVAs."""
-    helper_positions: list[int] = []
-    position = 0
-    while True:
-        position = text.find(HDR_OUTPUT_HELPER_BYTES, position)
-        if position < 0:
-            break
-        helper_positions.append(position)
-        position += 1
-    if len(helper_positions) != 1:
+    """Return the unique ScreenWin hook and verified output-helper RVAs.
+
+    The helper is matched by its exact instructions and control flow, so a
+    compiler that places its blocks apart (as Edge 158 does) is still found.
+    """
+    from resilient_layout import find_output_helpers  # local: avoids a cycle
+
+    helper_rvas = [entry for entry, _runs in find_output_helpers(text, text_rva)]
+    if len(helper_rvas) != 1:
         raise PatchError(
             "Runtime discovery expected one ScreenWin output helper, "
-            f"found {len(helper_positions)}"
+            f"found {len(helper_rvas)}"
         )
-    helper_rva = text_rva + helper_positions[0]
+    helper_rva = helper_rvas[0]
 
     hook_rvas: list[int] = []
     position = 0

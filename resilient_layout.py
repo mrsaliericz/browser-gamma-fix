@@ -404,20 +404,130 @@ def find_padding_caves(dll: Path, sections, text: bytes, text_rva: int, minimum:
     return caves
 
 
+# The output helper, as a small control-flow graph of exact instructions.
+# Compilers have started to split it into separately placed fragments joined
+# by jumps (Edge 158 places the prologue and the body ~120 MB apart), so it is
+# matched by meaning rather than by one contiguous byte string.  Every
+# instruction must still match exactly (mnemonic and operands); only the
+# placement of blocks and the encoding of jumps between them may differ.
+_HELPER_PROGRAM = {
+    "entry": (
+        "push rsi", "push rdi", "mov rax, rcx", "cmp dl, 2", "je @hdr",
+        "@@usage",
+    ),
+    "usage": (
+        "movzx ecx, dl", "cmp ecx, 1", "je @wcg", "test ecx, ecx", "jne @trap",
+        "movzx edx, r8b", "jmp @store",
+    ),
+    "hdr": ("movzx edx, r8b", "or rdx, 4", "jmp @store"),
+    "wcg": ("movzx edx, r8b", "or rdx, 2", "@@store"),
+    "store": (
+        "mov r8, qword ptr [rsp + 0x38]", "mov ecx, edx", "shl ecx, 6",
+        "lea edi, [rcx + rdx*4]", "add rdi, rax", "mov ecx, 0x11", "mov rsi, r9",
+        "rep movsd dword ptr [rdi], dword ptr [rsi]",
+        "mov qword ptr [rax + rdx*8 + 0x198], r8", "pop rdi", "pop rsi", "ret",
+    ),
+}
+_TRAPS = {"ud1", "ud2", "int3"}
+_HELPER_ENTRY_SIGNATURE = bytes.fromhex("56 57 48 89 C8 80 FA 02")
+
+
+def match_output_helper(text: bytes, text_rva: int, entry_rva: int):
+    """Return the byte runs of a verified output helper starting at entry_rva.
+
+    Unconditional jumps between blocks are followed transparently.  Returns
+    [(rva, bytes)] of every matched instruction (for later verification), or
+    None when anything differs from the modeled helper.
+    """
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_64  # noqa: WPS433
+
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    labels = {"entry": entry_rva}
+    runs = []
+    pending = ["entry"]
+    verified = set()
+
+    def decode(rva):
+        offset = rva - text_rva
+        if not 0 <= offset < len(text):
+            return None
+        return next(decoder.disasm(text[offset:offset + 16], rva), None)
+
+    def bind(label, rva):
+        if label in labels and labels[label] != rva:
+            return False
+        if label not in labels:
+            labels[label] = rva
+            pending.append(label)
+        return True
+
+    while pending:
+        label = pending.pop()
+        if label in verified:
+            continue
+        verified.add(label)
+        if label == "trap":
+            instruction = decode(labels[label])
+            if instruction is None or instruction.mnemonic not in _TRAPS:
+                return None
+            continue
+        rva = labels[label]
+        for expected in _HELPER_PROGRAM[label]:
+            # Follow placement jumps that the model does not contain.
+            for _hop in range(4):
+                instruction = decode(rva)
+                if instruction is None:
+                    return None
+                if instruction.mnemonic == "jmp" and not expected.startswith("jmp"):
+                    if instruction.op_str.startswith("0x"):
+                        rva = int(instruction.op_str, 16)
+                        continue
+                    return None
+                break
+            else:
+                return None
+            if expected.startswith("@@"):
+                if not bind(expected[2:], rva):
+                    return None
+                break
+            if " @" in expected:
+                mnemonic, _separator, target_label = expected.partition(" @")
+                if instruction.mnemonic != mnemonic or not instruction.op_str.startswith("0x"):
+                    return None
+                if not bind(target_label, int(instruction.op_str, 16)):
+                    return None
+            elif f"{instruction.mnemonic} {instruction.op_str}".strip() != expected:
+                return None
+            runs.append((instruction.address, bytes(instruction.bytes)))
+            rva = instruction.address + instruction.size
+    if set(labels) != set(_HELPER_PROGRAM) | {"trap"}:
+        return None
+    return runs
+
+
+def find_output_helpers(text: bytes, text_rva: int):
+    """All entries whose control flow matches the modeled output helper."""
+    found = []
+    position = 0
+    while (position := text.find(_HELPER_ENTRY_SIGNATURE, position)) >= 0:
+        runs = match_output_helper(text, text_rva, text_rva + position)
+        if runs is not None:
+            found.append((text_rva + position, runs))
+        position += 1
+    return found
+
+
 def discover_output_detour_layout(dll: Path, sections, text=None, text_rva=None) -> dict:
     """Locate the exact output helper and private code caves for its detour."""
     if text is None:
         text, text_rva = _text_section(sections, dll)
-    helpers = []
-    position = 0
-    while (position := text.find(HDR_OUTPUT_HELPER_BYTES, position)) >= 0:
-        helpers.append(text_rva + position)
-        position += 1
+    helpers = find_output_helpers(text, text_rva)
     if len(helpers) != 1:
         raise PatchError(
-            f"Fallback detour requires one exact output helper; found {len(helpers)}"
+            f"Fallback detour requires one verified output helper; found {len(helpers)}"
         )
-    helper = helpers[0]
+    helper, helper_runs = helpers[0]
+    contiguous = text[helper - text_rva:helper - text_rva + len(HDR_OUTPUT_HELPER_BYTES)]
 
     references = 0
     for opcode in (b"\xE8", b"\xE9"):
@@ -434,10 +544,9 @@ def discover_output_detour_layout(dll: Path, sections, text=None, text_rva=None)
         )
 
     caves = find_padding_caves(dll, sections, text, text_rva)
-    helper_end = helper + len(HDR_OUTPUT_HELPER_BYTES)
     caves = [
         cave for cave in caves
-        if cave[0] + cave[1] <= helper or cave[0] >= helper_end
+        if all(cave[0] + cave[1] <= rva or cave[0] >= rva + len(data) for rva, data in helper_runs)
     ]
     # Prefer caves close to the helper (ordinary code, same locality) and
     # never more than eight separate chunks.
@@ -459,8 +568,16 @@ def discover_output_detour_layout(dll: Path, sections, text=None, text_rva=None)
         if original != b"\xCC" * len(data):
             raise PatchError(f"Fallback detour cave at RVA 0x{rva:X} is not pristine padding")
         stub.append((rva, original, data))
+    # Everything matched except the prologue the detour replaces must stay
+    # byte-identical in the target process.
+    helper_checks = [
+        (rva, data) for rva, data in helper_runs
+        if not helper <= rva < helper + len(HELPER_PROLOGUE)
+    ]
     return dict(
         output_helper_rva=helper,
+        output_helper_contiguous=contiguous == HDR_OUTPUT_HELPER_BYTES,
+        output_helper_checks=helper_checks,
         output_helper_references=references,
         detour_chunks=stub,
         detour_hook_original=HELPER_PROLOGUE,

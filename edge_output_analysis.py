@@ -12,6 +12,7 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
 
 from gamma22_patcher import HDR_OUTPUT_HELPER_BYTES, PatchError, rva_to_offset
+from resilient_layout import find_output_helpers
 
 
 def family(ins, reg):
@@ -77,11 +78,7 @@ def find_compact_output_loop(dll, sections, text, text_rva):
     usage table in a cold function fragment. It is deliberately accepted only
     when every relationship below is unique and structurally exact.
     """
-    helpers = []
-    position = 0
-    while (position := text.find(HDR_OUTPUT_HELPER_BYTES, position)) >= 0:
-        helpers.append(text_rva + position)
-        position += 1
+    helpers = [entry for entry, _runs in find_output_helpers(text, text_rva)]
     if len(helpers) != 1:
         raise PatchError('Compact Edge analysis requires one exact output helper')
     helper = helpers[0]
@@ -188,11 +185,7 @@ def find_fused_output_loop(dll, sections, text, text_rva):
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
     decoder.detail = True
 
-    helpers = []
-    pos = 0
-    while (pos := text.find(HDR_OUTPUT_HELPER_BYTES, pos)) >= 0:
-        helpers.append(text_rva + pos)
-        pos += 1
+    helpers = [entry for entry, _runs in find_output_helpers(text, text_rva)]
     if len(helpers) != 1:
         raise PatchError('Fused Edge analysis requires one exact output helper')
     helper = helpers[0]
@@ -406,11 +399,7 @@ def find_fused_output_loop(dll, sections, text, text_rva):
 def find_split_output_loop(dll, sections, text, text_rva):
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
     decoder.detail = True
-    helpers = []
-    pos = 0
-    while (pos := text.find(HDR_OUTPUT_HELPER_BYTES, pos)) >= 0:
-        helpers.append(text_rva + pos)
-        pos += 1
+    helpers = [entry for entry, _runs in find_output_helpers(text, text_rva)]
     if len(helpers) != 1:
         raise PatchError('Semantic Edge analysis requires one exact output helper')
     helper = helpers[0]

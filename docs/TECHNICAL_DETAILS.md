@@ -59,7 +59,9 @@ that is used only when the verified analyzer for that half rejects a build:
   SSE/AVX loads work alike and the number of sites is irrelevant. Unpaired
   loads (Display-P3, Skia comparisons) stay unchanged; too few pairs or too
   many unpaired loads reject the constant.
-- SDR output: the exact, long-stable `SetOutputColorSpaceAndFormat` helper gets
+- SDR output: the long-stable `SetOutputColorSpaceAndFormat` helper (matched by
+  its exact instructions and control flow, so a helper split into distant
+  fragments as in Edge 158 is still recognized) gets
   a 5-byte entry detour. For `kWideColorGamut` it first calls the original
   body with `kSRGB` and identical arguments; every other call passes straight
   through. The stub lives only in INT3 padding between `.pdata`-declared
