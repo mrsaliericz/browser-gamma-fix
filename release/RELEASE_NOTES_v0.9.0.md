@@ -44,10 +44,16 @@ browser files on disk.
 
 ### Validation
 
-- 18 new automated tests: constructor-count drift, mixed BT.709/P3 loads,
-  movups pairs, chained detour caves, padding-only cave selection, role routing
-  and write ordering. On Windows the test suite also executes the real helper
-  bytes with and without the detour.
+- 19 new automated tests: constructor-count drift, mixed BT.709/P3 loads,
+  movups pairs in either order, partial copies, chained detour caves,
+  padding-only cave selection, role routing and write ordering. On Windows the
+  suite also executes the real helper bytes with and without the detour; all
+  80 tests pass.
+- The current Microsoft Edge build, which v0.8.0 reported as Unsupported
+  (77 sRGB singleton constructors, below the previous 97-120 bound), is now
+  supported via the GPU gamma fallback (77 redirects) and the verified fused
+  output-loop analyzer. Chrome 156.0.8078.80 continues to use the strict
+  analyzers (90 gamma writes).
 - Read-only analysis of four real Chromium x64 Windows binaries (Electron 42,
   44, 45.0 and 45.2) — whose layouts the strict Chrome analyzer does not
   recognize — produced complete plans with 40–53 gamma redirects. On all four,
