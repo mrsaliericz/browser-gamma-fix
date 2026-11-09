@@ -39,7 +39,7 @@ browser files on disk.
 - New `tools/compatibility_report.py` runs the analyzers read-only against all
   installed Chrome/Edge/Brave/Vivaldi channels or given DLLs.
 - New daily GitHub workflow analyzes the runner's Stable Chrome/Edge and
-  downloaded Beta/Dev/Canary builds, giving weeks of warning before a layout
+  freshly installed Beta/Dev builds, giving weeks of warning before a layout
   reaches Stable.
 
 ### Validation
