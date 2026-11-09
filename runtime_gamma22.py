@@ -26,6 +26,7 @@ import struct
 import subprocess
 import sys
 
+import resilient_layout
 from gamma22_patcher import (
     GAMMA22_TRANSFER_FUNCTION,
     HDR_OUTPUT_HELPER_BYTES,
@@ -33,6 +34,8 @@ from gamma22_patcher import (
     SRGB_GAMUT,
     SRGB_TRANSFER_FUNCTION,
     branch,
+    discover_chrome_gamma_layout,
+    discover_chrome_output_layout,
     discover_chrome_runtime_layout,
     find_all_rvas,
     make_trampoline,
@@ -531,9 +534,29 @@ class RuntimePlan:
     writes: list[MemoryWrite]
 
 
+def read_text_section(dll: Path, sections, missing: str = "PE file has no .text section"):
+    try:
+        _name, text_rva, _virtual_size, text_offset, text_size = next(
+            section for section in sections if section[0] == ".text"
+        )
+    except StopIteration as error:
+        raise PatchError(missing) from error
+    with dll.open("rb") as stream:
+        stream.seek(text_offset)
+        return stream.read(text_size), text_rva
+
+
 def discover_edge_runtime_layout(dll: Path) -> dict:
     """Discover Edge's singleton gamma and ScreenWin usage-loop layout."""
     sections = read_pe_sections(dll)
+    gamma = discover_edge_gamma_layout(dll, sections)
+    text, text_rva = read_text_section(dll, sections, "Edge DLL has no .text section")
+    output = discover_edge_output_layout(dll, sections, text, text_rva)
+    return {"kind": "edge-singleton-usage-table", **gamma, **output}
+
+
+def discover_edge_gamma_layout(dll: Path, sections, text=None, text_rva=None) -> dict:
+    """Discover Edge's strict canonical sRGB singleton constructors."""
     gamut_rvas = set(find_all_rvas(dll, sections, SRGB_GAMUT))
     srgb_rvas = set(find_all_rvas(dll, sections, SRGB_TRANSFER_FUNCTION))
     gamma_rvas = set(find_all_rvas(dll, sections, GAMMA22_TRANSFER_FUNCTION))
@@ -552,15 +575,8 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
         )
     gamut_rva, srgb_rva, gamma_rva = constant_blocks[0]
 
-    try:
-        _name, text_rva, _virtual_size, text_offset, text_size = next(
-            section for section in sections if section[0] == ".text"
-        )
-    except StopIteration as error:
-        raise PatchError("Edge DLL has no .text section") from error
-    with dll.open("rb") as stream:
-        stream.seek(text_offset)
-        text = stream.read(text_size)
+    if text is None:
+        text, text_rva = read_text_section(dll, sections, "Edge DLL has no .text section")
 
     def rip_target(position: int, displacement_offset: int, size: int) -> int:
         displacement = struct.unpack_from(
@@ -625,6 +641,24 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
         rva + 19 for rva, _factory, _pointer in constructors
     }:
         raise PatchError("Unrecognized Edge sRGB singleton initializer store")
+    return {
+        "srgb_gamut_rva": gamut_rva,
+        "srgb_transfer_rva": srgb_rva,
+        "gamma22_transfer_rva": gamma_rva,
+        "initializer_rvas": [rva for rva, _factory, _pointer in constructors],
+        "singleton_factory_rva": singleton_factory_rva,
+        "singleton_pointer_rva": singleton_pointer_rva,
+    }
+
+
+def discover_edge_output_layout(dll: Path, sections, text: bytes, text_rva: int) -> dict:
+    """Discover Edge's strict ScreenWin SDR/WCG/HDR usage loop."""
+
+    def rip_target(position: int, displacement_offset: int, size: int) -> int:
+        displacement = struct.unpack_from(
+            "<i", text, position + displacement_offset
+        )[0]
+        return text_rva + position + size + displacement
 
     loop_candidates: list[tuple[int, int, int, bytes]] = []
     loop_prefix = b"\x45\x31\xC0\x4C\x8D\x8C\x24"
@@ -675,13 +709,19 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
             find_fused_output_loop,
             find_split_output_loop,
         )
-        try:
-            semantic = find_compact_output_loop(dll, sections, text, text_rva)
-        except PatchError:
+        semantic = None
+        analyzer_errors = []
+        for analyzer in (find_compact_output_loop, find_fused_output_loop, find_split_output_loop):
             try:
-                semantic = find_fused_output_loop(dll, sections, text, text_rva)
-            except PatchError:
-                semantic = find_split_output_loop(dll, sections, text, text_rva)
+                semantic = analyzer(dll, sections, text, text_rva)
+                break
+            except PatchError as error:
+                analyzer_errors.append(f"{analyzer.__name__}: {error}")
+        if semantic is None:
+            raise PatchError(
+                "Expected one strict Edge SDR/WCG/HDR output loop; "
+                + " | ".join(analyzer_errors)
+            )
         loop_candidates.append((semantic['loop_limit_rva'], semantic['usage_table_rva'],
                                 semantic['output_helper_rva'], semantic['loop_context']))
     else:
@@ -695,13 +735,6 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
         raise PatchError("Invalid Edge ScreenWin output helper target")
 
     return {
-        "kind": "edge-singleton-usage-table",
-        "srgb_gamut_rva": gamut_rva,
-        "srgb_transfer_rva": srgb_rva,
-        "gamma22_transfer_rva": gamma_rva,
-        "initializer_rvas": [rva for rva, _factory, _pointer in constructors],
-        "singleton_factory_rva": singleton_factory_rva,
-        "singleton_pointer_rva": singleton_pointer_rva,
         "loop_limit_rva": loop_rva,
         "usage_table_rva": usage_table_rva,
         "output_helper_rva": output_helper_rva,
@@ -710,9 +743,8 @@ def discover_edge_runtime_layout(dll: Path) -> dict:
     }
 
 
-def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
-    layout = discover_edge_runtime_layout(dll)
-    sections = read_pe_sections(dll)
+def _edge_gamma_component(dll: Path, sections, text, text_rva):
+    layout = discover_edge_gamma_layout(dll, sections, text, text_rva)
     writes: list[MemoryWrite] = []
     with dll.open("rb") as stream:
         for index, initializer_rva in enumerate(layout["initializer_rvas"], 1):
@@ -729,6 +761,17 @@ def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
                     b"\x48\x8D\x0D" + rel32(initializer_rva, 7, layout["gamma22_transfer_rva"]),
                 )
             )
+    checks = [
+        ("sRGB gamut", layout["srgb_gamut_rva"], SRGB_GAMUT),
+        ("sRGB transfer", layout["srgb_transfer_rva"], SRGB_TRANSFER_FUNCTION),
+        ("gamma 2.2 transfer", layout["gamma22_transfer_rva"], GAMMA22_TRANSFER_FUNCTION),
+    ]
+    return layout, writes, checks
+
+
+def _edge_output_component(dll: Path, sections, text, text_rva):
+    layout = discover_edge_output_layout(dll, sections, text, text_rva)
+    with dll.open("rb") as stream:
         loop_original = read_at(
             stream, rva_to_offset(sections, layout["loop_limit_rva"]), len(layout.get('loop_original', b'\x48\x83\xFF\x02'))
         )
@@ -751,14 +794,14 @@ def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
     # Populate private table storage, repoint the table load if needed, then
     # change the loop count last. This keeps execution on the upstream path if
     # a write is interrupted before the plan is complete.
-    writes.append(
+    writes = [
         MemoryWrite(
             "ScreenWin usage table",
             layout["usage_table_rva"],
             table_original,
             b"\x00\x01\x02",
         )
-    )
+    ]
     if relocation:
         relocation_rva, relocation_original, relocation_patched, _cave_rva = relocation
         writes.append(
@@ -777,22 +820,14 @@ def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
             layout.get('loop_patched', b"\x48\x83\xFF\x03"),
         )
     )
-    checks = [
-        ("sRGB gamut", layout["srgb_gamut_rva"], SRGB_GAMUT),
-        ("sRGB transfer", layout["srgb_transfer_rva"], SRGB_TRANSFER_FUNCTION),
-        ("gamma 2.2 transfer", layout["gamma22_transfer_rva"], GAMMA22_TRANSFER_FUNCTION),
-        ("ScreenWin output helper", layout["output_helper_rva"], HDR_OUTPUT_HELPER_BYTES),
-    ]
+    checks = [("ScreenWin output helper", layout["output_helper_rva"], HDR_OUTPUT_HELPER_BYTES)]
     checks.extend(layout.get('semantic_checks', []))
-    return RuntimePlan(dll, sha256(dll), layout, checks, writes)
+    return layout, writes, checks
 
 
-def make_runtime_plan(dll: Path) -> RuntimePlan:
-    if dll.name.lower().startswith("msedge.dll"):
-        return make_edge_runtime_plan(dll)
-    layout = discover_chrome_runtime_layout(dll)
-    sections = read_pe_sections(dll)
-    color_writes: list[MemoryWrite] = []
+def _chrome_gamma_component(dll: Path, sections, text, text_rva):
+    layout = discover_chrome_gamma_layout(dll, sections, text, text_rva)
+    writes: list[MemoryWrite] = []
     with dll.open("rb") as stream:
         for index, (first, second) in enumerate(layout["initializer_pairs"], 1):
             for half, instruction_rva, target_rva in (
@@ -800,7 +835,7 @@ def make_runtime_plan(dll: Path) -> RuntimePlan:
                 ("b", second, layout["gamma22_transfer_rva"] + 12),
             ):
                 original = read_at(stream, rva_to_offset(sections, instruction_rva), 7)
-                color_writes.append(
+                writes.append(
                     MemoryWrite(
                         f"sRGB initializer {index}{half}",
                         instruction_rva,
@@ -808,7 +843,16 @@ def make_runtime_plan(dll: Path) -> RuntimePlan:
                         transfer_load(instruction_rva, target_rva, original),
                     )
                 )
+    checks = [
+        ("sRGB gamut", layout["srgb_gamut_rva"], SRGB_GAMUT),
+        ("sRGB transfer", layout["srgb_transfer_rva"], SRGB_TRANSFER_FUNCTION),
+        ("gamma 2.2 transfer", layout["gamma22_transfer_rva"], GAMMA22_TRANSFER_FUNCTION),
+    ]
+    return layout, writes, checks
 
+
+def _chrome_output_component(dll: Path, sections, text, text_rva):
+    layout = discover_chrome_output_layout(dll, text, text_rva)
     trampoline_recipe = {
         "hdr_output": {
             "cave_rva": hex(layout["cave_rva"]),
@@ -820,7 +864,7 @@ def make_runtime_plan(dll: Path) -> RuntimePlan:
     trampoline = make_trampoline(trampoline_recipe)
     cave_original = b"\xCC" * layout["cave_size"]
     cave_patched = trampoline + cave_original[len(trampoline) :]
-    writes = color_writes + [
+    writes = [
         MemoryWrite(
             "SDR scRGB/F16 trampoline",
             layout["cave_rva"],
@@ -834,13 +878,143 @@ def make_runtime_plan(dll: Path) -> RuntimePlan:
             branch(0xE9, layout["hook_rva"], layout["cave_rva"]),
         ),
     ]
+    checks = [("ScreenWin output helper", layout["set_output_call_rva"], HDR_OUTPUT_HELPER_BYTES)]
+    return layout, writes, checks
+
+
+def _fallback_gamma_component(dll: Path, sections, text, text_rva):
+    """Redirect every BT.709-paired sRGB transfer load to gamma 2.2 (GPU role)."""
+    layout = resilient_layout.discover_gamma_pairs_layout(dll, sections, text, text_rva)
+    gamma = layout["gamma22_transfer_rva"]
+    writes: list[MemoryWrite] = []
+    with dll.open("rb") as stream:
+        for index, use in enumerate(layout["gamma_pair_uses"], 1):
+            for part, (rva, offset, length) in enumerate(use):
+                original = read_at(stream, rva_to_offset(sections, rva), length)
+                suffix = "" if len(use) == 1 else "ab"[part]
+                writes.append(
+                    MemoryWrite(
+                        f"{resilient_layout.LABEL_GAMMA_PREFIX}{index}{suffix}",
+                        rva,
+                        original,
+                        resilient_layout.redirect_load(original, rva, gamma + offset),
+                    )
+                )
+    layout["initializer_rvas"] = [use[0][0] for use in layout["gamma_pair_uses"]]
     checks = [
         ("sRGB gamut", layout["srgb_gamut_rva"], SRGB_GAMUT),
         ("sRGB transfer", layout["srgb_transfer_rva"], SRGB_TRANSFER_FUNCTION),
-        ("gamma 2.2 transfer", layout["gamma22_transfer_rva"], GAMMA22_TRANSFER_FUNCTION),
-        ("ScreenWin output helper", layout["set_output_call_rva"], HDR_OUTPUT_HELPER_BYTES),
+        ("gamma 2.2 transfer", gamma, GAMMA22_TRANSFER_FUNCTION),
     ]
-    return RuntimePlan(dll, sha256(dll), layout, checks, writes)
+    return layout, writes, checks
+
+
+def _fallback_output_component(dll: Path, sections, text, text_rva):
+    """Detour the output helper entry so kSRGB mirrors kWideColorGamut."""
+    layout = resilient_layout.discover_output_detour_layout(dll, sections, text, text_rva)
+    helper = layout["output_helper_rva"]
+    prologue = len(resilient_layout.HELPER_PROLOGUE)
+    # Populate the stub first and enable the entry jump last; disabling in the
+    # browser role reverses this order.
+    writes = [
+        MemoryWrite(
+            f"{resilient_layout.LABEL_DETOUR_STUB} {index}",
+            rva,
+            original,
+            patched,
+        )
+        for index, (rva, original, patched) in enumerate(layout["detour_chunks"], 1)
+    ]
+    writes.append(
+        MemoryWrite(
+            resilient_layout.LABEL_DETOUR_HOOK,
+            helper,
+            layout["detour_hook_original"],
+            layout["detour_hook_patched"],
+        )
+    )
+    checks = [("ScreenWin output helper body", helper + prologue, HDR_OUTPUT_HELPER_BYTES[prologue:])]
+    return layout, writes, checks
+
+
+def _first_component(dll, sections, text, text_rva, attempts):
+    """Return the first verified component and every rejected reason."""
+    reasons = []
+    for strategy, builder in attempts:
+        try:
+            layout, writes, checks = builder(dll, sections, text, text_rva)
+            return strategy, layout, writes, checks, reasons
+        except (PatchError, ImportError, struct.error) as error:
+            reasons.append(f"{strategy}: {error}")
+    raise PatchError("; ".join(reasons))
+
+
+def make_runtime_plan(dll: Path) -> RuntimePlan:
+    """Build a role-separated runtime plan for one Chromium browser DLL.
+
+    The verified compiler-specific analyzers are preferred.  When a browser
+    update changes code generation, each component falls back independently to
+    its layout-independent equivalent in ``resilient_layout``.
+    """
+    edge = dll.name.lower().startswith("msedge.dll")
+    sections = read_pe_sections(dll)
+    text, text_rva = read_text_section(
+        dll, sections, "Edge DLL has no .text section" if edge else "PE file has no .text section"
+    )
+    if edge:
+        gamma_attempts = (("strict", _edge_gamma_component), ("fallback", _fallback_gamma_component))
+        output_attempts = (("strict", _edge_output_component), ("fallback", _fallback_output_component))
+        kind = "edge-singleton-usage-table"
+    else:
+        gamma_attempts = (("strict", _chrome_gamma_component), ("fallback", _fallback_gamma_component))
+        output_attempts = (("strict", _chrome_output_component), ("fallback", _fallback_output_component))
+        kind = "loads-trampoline"
+    errors = []
+    try:
+        gamma = _first_component(dll, sections, text, text_rva, gamma_attempts)
+    except PatchError as error:
+        errors.append(f"GPU gamma: {error}")
+        gamma = None
+    try:
+        output = _first_component(dll, sections, text, text_rva, output_attempts)
+    except PatchError as error:
+        errors.append(f"SDR output path: {error}")
+        output = None
+    if errors:
+        raise PatchError(" || ".join(errors))
+
+    gamma_strategy, gamma_layout, gamma_writes, gamma_checks, gamma_reasons = gamma
+    output_strategy, output_layout, output_writes, output_checks, output_reasons = output
+    layout = {"kind": kind, **gamma_layout, **output_layout}
+    layout["gamma_strategy"] = gamma_strategy
+    layout["output_strategy"] = output_strategy
+    layout["fallback_reasons"] = gamma_reasons + output_reasons
+    layout["strategy_summary"] = f"gamma={gamma_strategy}, output={output_strategy}"
+    return RuntimePlan(
+        dll,
+        sha256(dll),
+        layout,
+        gamma_checks + output_checks,
+        gamma_writes + output_writes,
+    )
+
+
+def make_edge_runtime_plan(dll: Path) -> RuntimePlan:
+    return make_runtime_plan(dll)
+
+
+def describe_plan(plan: RuntimePlan) -> str:
+    """One-line human description used by logs and the scan-only CLI."""
+    layout = plan.layout
+    gamma_writes = sum(item.label.startswith("sRGB initializer ") for item in plan.writes)
+    text = (
+        f"{layout.get('strategy_summary', 'strict')}; "
+        f"{gamma_writes} GPU gamma write(s), "
+        f"{len(plan.writes) - gamma_writes} browser output write(s)"
+    )
+    if layout.get("fallback_reasons"):
+        text += f"; strict analyzer notes: {' | '.join(layout['fallback_reasons'])}"
+    return text
 
 
 def patch_loaded_module(
@@ -1025,7 +1199,7 @@ def run_debug_loop(command: list[str], plan: RuntimePlan) -> int:
                         patched_pids.add(pid)
                         print(
                             f"  PID {pid}: chrome.dll @ 0x{module_base:X} - {state} "
-                            f"({len(plan.layout['initializer_pairs']) * 2} gamma loads + SDR F16 hook)"
+                            f"({describe_plan(plan)})"
                         )
                 elif event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT:
                     code = int(event.Exception.ExceptionRecord.ExceptionCode)
@@ -1181,20 +1355,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
-    layout = plan.layout
     print(f"SHA-256: {plan.dll_hash}")
-    if "initializer_pairs" in layout:
-        print(
-            "Verified layout: "
-            f"{len(layout['initializer_pairs'])} BT.709/sRGB initializers, "
-            f"hook RVA 0x{layout['hook_rva']:X}, cave RVA 0x{layout['cave_rva']:X}"
-        )
-    else:
-        print(
-            "Verified layout: "
-            f"{len(layout['initializer_rvas'])} BT.709/sRGB initializers, "
-            f"loop RVA 0x{layout['loop_limit_rva']:X}"
-        )
+    print(f"Verified layout: {describe_plan(plan)}")
     print("Disk mode: read-only (all changes will be private process memory)")
 
     if args.scan_only:

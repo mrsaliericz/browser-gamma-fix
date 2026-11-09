@@ -342,6 +342,12 @@ def discover_chrome_runtime_layout(path: Path) -> dict:
     unique and must pass the same semantic checks as a hand-authored recipe.
     It currently recognizes the stable layout in official Chrome 150-152.
     """
+    result = discover_chrome_gamma_layout(path)
+    result.update(discover_chrome_output_layout(path))
+    return result
+
+
+def _chrome_text(path: Path):
     sections = read_pe_sections(path)
     try:
         _name, text_rva, _virtual_size, text_offset, text_size = next(
@@ -352,7 +358,13 @@ def discover_chrome_runtime_layout(path: Path) -> dict:
     with path.open("rb") as stream:
         stream.seek(text_offset)
         text = stream.read(text_size)
+    return sections, text, text_rva
 
+
+def discover_chrome_gamma_layout(path: Path, sections=None, text=None, text_rva=None) -> dict:
+    """Discover Chrome's strict BT.709/sRGB transfer-load pairs."""
+    if text is None:
+        sections, text, text_rva = _chrome_text(path)
     gamut_constants = find_all_rvas(path, sections, SRGB_GAMUT)
     srgb_constants = find_all_rvas(path, sections, SRGB_TRANSFER_FUNCTION)
     gamma_constants = find_all_rvas(path, sections, GAMMA22_TRANSFER_FUNCTION)
@@ -387,7 +399,13 @@ def discover_chrome_runtime_layout(path: Path) -> dict:
             "Runtime discovery expected one canonical BT.709/sRGB initializer "
             f"group, found {len(candidates)}"
         )
+    return candidates[0]
 
+
+def discover_chrome_output_layout(path: Path, text=None, text_rva=None) -> dict:
+    """Discover Chrome's strict ScreenWin call-site hook and code cave."""
+    if text is None:
+        _sections, text, text_rva = _chrome_text(path)
     hook_rva, helper_rva = find_chrome_hdr_output_hook_in_text(text, text_rva)
     resume_rva = hook_rva + len(HDR_OUTPUT_HOOK_ORIGINAL)
     call_offset = resume_rva - text_rva
@@ -421,18 +439,14 @@ def discover_chrome_runtime_layout(path: Path) -> dict:
         )
     cave_rva = text_rva + cave_positions[0] + 1
 
-    result = candidates[0]
-    result.update(
-        {
-            "hook_rva": hook_rva,
-            "hook_original": HDR_OUTPUT_HOOK_ORIGINAL,
-            "resume_rva": resume_rva,
-            "set_output_call_rva": helper_rva,
-            "cave_rva": cave_rva,
-            "cave_size": 96,
-        }
-    )
-    return result
+    return {
+        "hook_rva": hook_rva,
+        "hook_original": HDR_OUTPUT_HOOK_ORIGINAL,
+        "resume_rva": resume_rva,
+        "set_output_call_rva": helper_rva,
+        "cave_rva": cave_rva,
+        "cave_size": 96,
+    }
 
 
 def find_initializer_loads(

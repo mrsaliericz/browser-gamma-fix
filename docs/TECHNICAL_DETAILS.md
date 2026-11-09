@@ -50,6 +50,27 @@ the runtime creates the replacement three-byte table in verified unused `.text`
 padding outside declared function ranges, repoints the one verified table-load
 instruction, and changes the loop limit last. Disabling reverses that order.
 
+Since v0.9.0, each half of the fix also has a layout-independent fallback
+that is used only when the verified analyzer for that half rejects a build:
+
+- GPU gamma: every load of the canonical sRGB transfer constant whose very next
+  RIP-relative data load is the BT.709 gamut is redirected to the adjacent
+  gamma 2.2 constant. Only the 32-bit displacement changes, so lea, mov and
+  SSE/AVX loads work alike and the number of sites is irrelevant. Unpaired
+  loads (Display-P3, Skia comparisons) stay unchanged; too few pairs or too
+  many unpaired loads reject the constant.
+- SDR output: the exact, long-stable `SetOutputColorSpaceAndFormat` helper gets
+  a 5-byte entry detour. For `kWideColorGamut` it first calls the original
+  body with `kSRGB` and identical arguments; every other call passes straight
+  through. The stub lives only in INT3 padding between `.pdata`-declared
+  functions (chained across several gaps when needed), is written before the
+  entry jump and removed after it.
+
+The diagnostic log reports the chosen strategy per half, e.g.
+`gamma=fallback, output=strict`. `tools/compatibility_report.py` runs the same
+analysis read-only, and the daily *Browser compatibility* workflow applies it
+to Stable plus Beta/Dev/Canary Chrome and Edge builds.
+
 The project has also passed live testing through multiple successive Chrome and
 Edge updates. That is evidence of compatibility with tested layouts, not a
 guarantee for a future Chromium implementation.

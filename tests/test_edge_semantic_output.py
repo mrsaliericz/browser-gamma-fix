@@ -115,6 +115,7 @@ def fused_fixture(two_byte_table=True):
 
 class SemanticOutputTests(unittest.TestCase):
     plan=fixtures.EdgeRuntimeLayoutTests.plan
+    strict_layout=fixtures.EdgeRuntimeLayoutTests.strict_layout
 
     def test_stack_offsets_and_loop_register_can_change(self):
         for shift,index in ((0,False),(0x100,False),(0x80,True)):
@@ -140,7 +141,7 @@ class SemanticOutputTests(unittest.TestCase):
                     pos=image.data.find(bytes.fromhex('41 b0 01'),start,end)
                     image.data[pos+2]=0
                 else: image.data[image.labels['primary']]=0xcc
-                with self.assertRaises(runtime.PatchError): self.plan(image)
+                with self.assertRaises(runtime.PatchError): self.strict_layout(image)
 
     def test_evidence_excludes_only_mutable_loop_instruction(self):
         image=split_fixture(); plan=self.plan(image)
@@ -166,7 +167,7 @@ class SemanticOutputTests(unittest.TestCase):
         image = fused_fixture(two_byte_table=True)
         image.data[image.TABLE] = 0
         with self.assertRaises(runtime.PatchError):
-            self.plan(image)
+            self.strict_layout(image)
 
 
 if __name__=='__main__': unittest.main()

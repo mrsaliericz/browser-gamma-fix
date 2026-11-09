@@ -74,6 +74,13 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
             self.assertEqual(dll.read_bytes(), fixture.data)
             return result
 
+    def strict_layout(self, fixture):
+        """Exercise only the compiler-specific analyzer, without fallbacks."""
+        with tempfile.TemporaryDirectory() as directory:
+            dll = Path(directory) / "msedge.dll"
+            dll.write_bytes(fixture.data)
+            return runtime.discover_edge_runtime_layout(dll)
+
     def test_known_counts_produce_complete_plan(self):
         for count in (97, 98, 99, 100, 101, 102, 120):
             with self.subTest(count=count):
@@ -93,7 +100,7 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
             with self.subTest(count=count), self.assertRaisesRegex(
                 runtime.PatchError, "Unexpected Edge singleton constructors"
             ):
-                self.plan(EdgeImage(count))
+                self.strict_layout(EdgeImage(count))
 
     def test_mixed_factory_or_pointer_is_rejected(self):
         for field in ("factory", "pointer"):
@@ -106,7 +113,7 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
                     base = fixture.FIRST_INITIALIZER + 19
                     fixture.put(base + 3, runtime.rel32(base, 7, fixture.POINTER + 16))
                 with self.assertRaisesRegex(runtime.PatchError, "factory/pointer tuple"):
-                    self.plan(fixture)
+                    self.strict_layout(fixture)
 
     def test_partial_98_layout_is_not_accepted_as_97(self):
         # Both changes leave 97 valid constructors. The completeness checks
@@ -120,7 +127,7 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
                 else:
                     fixture.put(base + 3, runtime.rel32(base, 7, fixture.GAMMA22))
                 with self.assertRaisesRegex(runtime.PatchError, error):
-                    self.plan(fixture)
+                    self.strict_layout(fixture)
 
     def test_missing_or_ambiguous_constants_are_rejected(self):
         for variant in ("missing", "duplicate"):
@@ -131,7 +138,7 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
                 else:
                     fixture.put(0x6300, fixture.data[fixture.GAMUT:fixture.GAMMA22 + 28])
                 with self.assertRaisesRegex(runtime.PatchError, "constant block"):
-                    self.plan(fixture)
+                    self.strict_layout(fixture)
 
     def test_invalid_output_loop_or_table_is_rejected(self):
         for address in (EdgeImage.LOOP + 50, EdgeImage.TABLE):
@@ -139,13 +146,13 @@ class EdgeRuntimeLayoutTests(unittest.TestCase):
                 fixture = EdgeImage()
                 fixture.data[address] ^= 1
                 with self.assertRaisesRegex(runtime.PatchError, "output loop"):
-                    self.plan(fixture)
+                    self.strict_layout(fixture)
 
     def test_multiple_output_loops_are_rejected(self):
         fixture = EdgeImage()
         fixture.add_output_loop(0x2400)
         with self.assertRaisesRegex(runtime.PatchError, "output loop; found 2"):
-            self.plan(fixture)
+            self.strict_layout(fixture)
 
     def test_shared_color_constants_are_not_patch_targets(self):
         fixture = EdgeImage()
